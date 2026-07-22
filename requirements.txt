@@ -5,3 +5,5 @@
 Pillow==12.3.0
 numpy==2.4.5
 pytest==9.0.3
+# Ultra (fal PATINA) engine only — not needed for the offline Fast engine:
+fal-client>=0.5

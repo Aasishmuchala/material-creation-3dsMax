@@ -1,6 +1,7 @@
 # secrets — never commit
 _falkey.py
 _omegakey.py
+_keys.json
 
 # generated / transient
 *_maps/

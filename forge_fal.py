@@ -66,14 +66,10 @@ def fable_prompt(image_path, mclass, base_prompt):
     LOOKING at the reference photo. Falls back to `base_prompt` on any error so
     generation never depends on the gateway being up."""
     try:
-        import _omegakey
-    except Exception:
-        return base_prompt
-    try:
         import base64
         import io
-        import urllib.request
 
+        import mfconfig
         from PIL import Image
 
         im = Image.open(image_path).convert("RGB")
@@ -81,7 +77,6 @@ def fable_prompt(image_path, mclass, base_prompt):
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
-
         instr = (
             "You are writing ONE line of text prompt for a PBR material "
             "generator (fal PATINA) from this reference photo of a %s. "
@@ -90,39 +85,14 @@ def fable_prompt(image_path, mclass, base_prompt):
             "with 'flat top-down, evenly lit, seamless PBR, photorealistic'. "
             "Reply with ONLY the prompt line, no preamble, no quotes."
             % mclass.replace("_", " "))
-        payload = {
-            "max_tokens": 220,
-            "messages": [{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64",
-                 "media_type": "image/jpeg", "data": b64}},
-                {"type": "text", "text": instr}]}]}
-
-        def call(model):
-            body = dict(payload, model=model)
-            req = urllib.request.Request(
-                _omegakey.OMEGA_BASE.rstrip("/") + "/messages",
-                data=json.dumps(body).encode(), method="POST")
-            req.add_header("Authorization", "Bearer " + _omegakey.OMEGA_KEY)
-            req.add_header("anthropic-version", "2023-06-01")
-            req.add_header("content-type", "application/json")
-            # the gateway is behind Cloudflare, which 403s (error 1010) the
-            # default python-urllib User-Agent — send a normal one.
-            req.add_header("User-Agent",
-                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "MatForge/1.0")
-            with urllib.request.urlopen(req, timeout=60) as r:
-                resp = json.load(r)
-            txt = "".join(p.get("text", "") for p in resp.get("content", [])
-                          if p.get("type") == "text").strip()
-            return txt.strip('"').strip()
-
-        for model in (_omegakey.OMEGA_MODEL, _omegakey.OMEGA_MODEL_FALLBACK):
-            try:
-                out = call(model)
-                if out and len(out) > 12:
-                    return out
-            except Exception:
-                continue
+        content = [
+            {"type": "image", "source": {"type": "base64",
+             "media_type": "image/jpeg", "data": b64}},
+            {"type": "text", "text": instr}]
+        out = (mfconfig.omega_message(content, max_tokens=400, timeout=35)
+               or "").strip().strip('"').strip()
+        if out and len(out) > 12:
+            return out
     except Exception:
         pass
     return base_prompt
@@ -144,9 +114,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if not os.environ.get("FAL_KEY"):
-        try:                      # hardcoded fallback so it works without env
-            import _falkey
-            os.environ["FAL_KEY"] = _falkey.FAL_KEY
+        try:
+            import mfconfig            # env -> _keys.json -> winreg -> _falkey
+            k = mfconfig.get_fal_key()
+            if k:
+                os.environ["FAL_KEY"] = k
         except Exception:
             pass
     if not os.environ.get("FAL_KEY"):
@@ -156,12 +128,14 @@ def main(argv=None):
         print(json.dumps({"ok": False, "error": f"image not found: {a.image}"}))
         return 1
 
-    out_dir = a.out or os.path.join(
-        os.path.dirname(os.path.abspath(a.image)), f"{a.name}_maps")
-    os.makedirs(out_dir, exist_ok=True)
-
+    # everything below is inside the try so any failure emits the {"ok":false}
+    # JSON contract rather than a raw traceback.
     try:
         import fal_client
+
+        out_dir = a.out or os.path.join(
+            os.path.dirname(os.path.abspath(a.image)), f"{a.name}_maps")
+        os.makedirs(out_dir, exist_ok=True)
 
         url = fal_client.upload_file(a.image)
         base_prompt = a.prompt or PROMPTS.get(a.mclass, PROMPTS["generic"])
@@ -180,7 +154,9 @@ def main(argv=None):
             mt = im.get("map_type")
             if mt in MAP_KEYS:
                 dest = os.path.join(out_dir, MAP_KEYS[mt] + ".png")
-                urllib.request.urlretrieve(im["url"], dest)
+                tmp = dest + ".part"       # atomic: download then rename
+                urllib.request.urlretrieve(im["url"], tmp)
+                os.replace(tmp, dest)
                 maps[MAP_KEYS[mt]] = os.path.abspath(dest)
                 res_px = im.get("width", res_px)
         if "albedo" not in maps:

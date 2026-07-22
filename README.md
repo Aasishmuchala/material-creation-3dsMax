@@ -6,23 +6,26 @@ Material Editor sphere, optionally assigned to selection.
 
 ## Install (once)
 1. Open Max 2026 (V-Ray 7 installed).
-2. Scripting > Run Script... > **`install_matforge.ms`**.
-   This registers a persistent **MatForge** menu (and toolbar actions under
-   Customize > Toolbars, category "MatForge"). No more "Run Script" each time.
+2. Scripting > Run Script... > **`install_matforge.ms`** — registers the
+   **MatForge** actions, sets the IE11 emulation the panel needs, and opens it.
+3. For one-click access later: Customize > Customize User Interface > Toolbars,
+   category **MatForge**, drag **MatForge** onto a toolbar. (Max 2025+ dropped
+   the classic menu API, so it's a toolbar button, not a menu.)
 
-## Use
-- **MatForge > MatForge** — the dark web **panel** (the premium UI): pick a
-  reference, name it, choose material type, resolution, and **Engine**:
+## Use — the panel (dark, three tabs)
+- **CREATE** — pick a reference, name it, choose material type, resolution, and
+  **Engine**:
   - **Fast** — deterministic heuristic maps, offline, no key.
   - **Ultra** — fal **PATINA** AI maps (studio-grade de-lit, up to 4K, real
-    metalness). Needs `FAL_KEY` set. → **Create Material → Sphere**.
-- **MatForge > MatForge (simple)** — a plain MAXScript rollout with the same
-  controls, as a guaranteed-render fallback if the web panel doesn't display
-  on your box (it uses Max's embedded browser).
+    metalness) with a **Fable-5** vision prompt written from the photo.
+  → **Create Material → Sphere** drops the wired VRayMtl on a Material Editor
+  sphere; tick "Assign to selected objects" to also apply it (+ displacement).
+- **SETTINGS** — paste your **fal** and **omega (Fable-5)** keys; saved to
+  `_keys.json` (git-ignored), overriding the built-in fallback.
+- **HELP** — a Fable-5 chat for when you're stuck on MatForge / V-Ray / workflow.
 
-Either UI generates the whole slate of maps and drops the wired VRayMtl onto a
-Material Editor sphere; tick "Assign to selected objects" to also apply it (and
-add a VRayDisplacementMod where the recipe calls for displacement).
+A plain rollout (`run_matforge.py`, action "MatForge (simple)") is the fallback
+if the embedded browser won't render on your box.
 
 ## Plugin files
 ```
@@ -58,7 +61,7 @@ maxplugin/builder.py  in-Max pymxs wiring (defensive property candidates)
 maxplugin/forge_max.py  dialog UI
 MAX_SMOKE.py          run inside Max -> SMOKE_OK + property-miss report
 tests/mock_pymxs.py   fake pymxs runtime — exercises builder wiring off-Max
-tests/                52 pytest checks (py -3.12 -m pytest tests)
+tests/                53 pytest checks (py -3.12 -m pytest tests)
 ```
 
 ## What is proven WITHOUT 3ds Max
@@ -80,7 +83,7 @@ Two map backends, same manifest contract (swap freely, Max side unchanged):
   The builder auto-wires the metalness map (`texmap_metalness`) when present.
 
 ## Verify
-- Core + wiring logic: `py -3.12 -m pytest tests -q` → 52 passed
+- Core + wiring logic: `py -3.12 -m pytest tests -q` → 53 passed
 - **Live V-Ray (no GUI):** `3dsmaxbatch.exe -log smoke_batch.log smoke_wrapper.ms`
   runs `HEADLESS_SMOKE.py` → writes `smoke_result.txt`. Builds all 13 classes
   against real V-Ray, reports any property-name misses. **Confirmed `SMOKE_OK`,

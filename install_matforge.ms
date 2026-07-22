@@ -1,12 +1,17 @@
 /*  MatForge installer — run ONCE (Scripting > Run Script).
-    Registers a persistent MatForge action + adds it to the main menu, so
-    afterwards you just click Menu > MatForge (or drag the button from
-    Customize > Toolbars, category "MatForge"). Re-running is safe.       */
+    Registers persistent MatForge actions, sets the IE emulation the web panel
+    needs, and opens the panel. Re-running is safe.
+
+    Note: on 3ds Max 2025+ the classic menuMan main-menu API is a no-op (Qt
+    menus), so we don't rely on it. Add the button yourself once via
+    Customize > Customize User Interface > Toolbars, category "MatForge" — or
+    just re-run this script / this line to open the panel again:
+        fileIn @"C:\Users\aasis\matforge\matforge_panel.ms"                    */
 
 global MatForgePanel  = @"C:\Users\aasis\matforge\matforge_panel.ms"
 global MatForgeSimple = @"C:\Users\aasis\matforge\run_matforge.py"
 
--- premium dark web panel (the DaVinci-style UI)
+-- premium dark web panel (Create / Settings / Help chat)
 macroScript MatForge_Open
     category:"MatForge"
     toolTip:"MatForge — reference image to V-Ray material (panel)"
@@ -18,7 +23,7 @@ macroScript MatForge_Open
     )
 )
 
--- reliable fallback rollout (if the web panel doesn't render on your box)
+-- reliable fallback rollout (if the embedded browser won't render on your box)
 macroScript MatForge_Simple
     category:"MatForge"
     toolTip:"MatForge — simple rollout (fallback)"
@@ -30,28 +35,17 @@ macroScript MatForge_Simple
     )
 )
 
--- add a "MatForge" item to the main menu bar (idempotent)
+-- set the IE11 emulation the WebBrowser control needs, then open the panel
 try (
-    local mm = menuMan.getMainMenuBar()
-    local existing = mm.getItem 1
-    local already = false
-    for i = 1 to mm.numItems() do (
-        local it = mm.getItem i
-        if (it != undefined and it.getTitle() == "MatForge") do already = true
-    )
-    if (not already) then (
-        local sub = menuMan.createMenu "MatForge"
-        sub.addItem (menuMan.createActionItem "MatForge_Open" "MatForge") -1
-        sub.addItem (menuMan.createActionItem "MatForge_Simple" "MatForge") -1
-        local topItem = menuMan.createSubMenuItem "MatForge" sub
-        mm.addItem topItem -1
-        menuMan.updateMenuBar()
-        format "MatForge: menu added.\n"
-    ) else (
-        format "MatForge: menu already present.\n"
-    )
-) catch (
-    format "MatForge: menu add skipped (%). Find the button in Customize > Toolbars, category 'MatForge'.\n" (getCurrentException())
-)
+    python.Execute "import sys; repo=r'C:\\Users\\aasis\\matforge'; (repo in sys.path) or sys.path.insert(0,repo)"
+    python.Execute "import maxplugin.forge_max as fm; fm.set_ie_emulation()"
+) catch()
 
-messageBox "MatForge installed.\n\nOpen it from the main menu: MatForge > MatForge,\nor add the button from Customize > Toolbars (category: MatForge)." title:"MatForge"
+messageBox ("MatForge installed.\n\n" + \
+    "Actions registered under Customize > Toolbars, category 'MatForge':\n" + \
+    "  • MatForge          (the panel)\n" + \
+    "  • MatForge (simple)  (fallback rollout)\n\n" + \
+    "Drag either onto a toolbar for one-click access.\n" + \
+    "Opening the panel now...") title:"MatForge"
+
+if (doesFileExist MatForgePanel) do fileIn MatForgePanel
