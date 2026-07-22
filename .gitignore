@@ -1,0 +1,18 @@
+# secrets — never commit
+_falkey.py
+_omegakey.py
+
+# generated / transient
+*_maps/
+sample_maps/*.jpg
+sample_maps/*.hdr
+render_*.png
+render_scene_final.png
+*.log
+smoke_result.txt
+render_*_result.txt
+__pycache__/
+*.pyc
+
+# generic tooling, not part of the product
+.claude/

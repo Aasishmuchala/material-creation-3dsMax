@@ -1,0 +1,7 @@
+# MatForge map-generation core runs on SYSTEM Python (py -3.12), not Max's
+# bundled Python. Pinned because derivation leans on version-sensitive numeric
+# behavior (PIL 'F'-mode resize, np.percentile, np.roll gradients) — an
+# unpinned upgrade can silently shift map outputs.
+Pillow==12.3.0
+numpy==2.4.5
+pytest==9.0.3
