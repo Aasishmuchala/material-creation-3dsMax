@@ -188,10 +188,11 @@ def _sanitize(name):
     return cleaned or "MatForge_Material"
 
 
-def _run_create(img, name, mclass, res, engine, seamless, assign):
+def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
     """Shared core used by both the rollout and the web panel. Generates the
     full slate of maps (heuristic 'fast' or fal-PATINA 'ultra') and wires the
-    VRayMtl onto a Material Editor sphere. Returns a result dict:
+    VRayMtl onto a Material Editor sphere. With slate=True, also opens the
+    Slate Material Editor showing the node wiring. Returns a result dict:
       {state: 'ok'|'err', text, material?, slot?, notes?}
     """
     name = _sanitize(name or "MatForge_Material")
@@ -257,7 +258,7 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
 
     try:
         out = builder.build_from_manifest(result["manifest"], slot=None,
-                                          assign=assign)
+                                          assign=assign, slate=slate)
     except Exception as e:
         return {"state": "err", "text": "Material wiring failed: %s" % e}
 
@@ -268,10 +269,14 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
     if misses:
         notes.append("%d V-Ray propert%s could not be set" % (
             len(misses), "y" if len(misses) == 1 else "ies"))
+    if slate and not out.get("slate"):
+        notes.append("Slate node view unavailable (needs an interactive Max "
+                     "session).")
+    slate_txt = "  + Slate node view" if out.get("slate") else ""
     return {"state": "ok", "material": out["material"], "slot": out["slot"],
             "notes": notes,
-            "text": "Done: '%s' -> editor slot %d%s" % (
-                out["material"], out["slot"],
+            "text": "Done: '%s' -> editor slot %d%s%s" % (
+                out["material"], out["slot"], slate_txt,
                 "  (with notes)" if notes else "")}
 
 
@@ -292,7 +297,8 @@ def create_material():
         res=["2k", "4k", "8k"][ui.ddRes.selection - 1],
         engine=["fast", "ultra"][ui.ddEngine.selection - 1],
         seamless=bool(ui.chkSeamless.checked),
-        assign=bool(ui.chkAssign.checked))
+        assign=bool(ui.chkAssign.checked),
+        slate=bool(ui.chkSlate.checked))
     ui.lblStatus.text = r["text"]
     if r["state"] == "err":
         rt.messageBox(r["text"], title="MatForge")
@@ -311,7 +317,7 @@ def create_from_panel(payload_json):
         r = _run_create(img=p.get("img", ""), name=p.get("name", ""),
                         mclass=p.get("cls", "generic"), res=p.get("res", "4k"),
                         engine=p.get("eng", "fast"), seamless=True,
-                        assign=bool(p.get("assign")))
+                        assign=bool(p.get("assign")), slate=bool(p.get("slate")))
     except Exception as e:
         r = {"state": "err", "text": "panel error: %s" % e}
     return json.dumps(r)
@@ -364,7 +370,8 @@ def _bridge_create():
     try:
         r = _run_create(p.get("img", ""), p.get("name", ""),
                         p.get("cls", "generic"), p.get("res", "4k"),
-                        p.get("eng", "fast"), True, bool(p.get("assign")))
+                        p.get("eng", "fast"), True, bool(p.get("assign")),
+                        slate=bool(p.get("slate")))
     except Exception as e:
         r = {"state": "err", "text": "panel error: %s" % e}
     rt.mfBridgeState = r.get("state", "ok")
@@ -407,6 +414,7 @@ rollout MatForgeRollout "MatForge v1" width:340
     dropdownlist ddEngine "Engine:" items:#("Fast  (offline, no key)","Ultra  (fal PATINA AI)") selection:1
     checkbox chkSeamless "Make seamless (tileable)" checked:true
     checkbox chkAssign "Assign to selected objects" checked:false
+    checkbox chkSlate "Open in Slate ME (show node wiring)" checked:false
     dropdownlist ddRes "Resolution (final output):" items:#("2K  -  2048 px","4K  -  4096 px","8K  -  8192 px") selection:2
     button btnCreate "Create Material  ->  Editor Sphere" width:320 height:32
     label lblStatus "Ready." width:320 align:#left

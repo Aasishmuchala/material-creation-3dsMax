@@ -273,6 +273,53 @@ def put_in_editor(mat, slot=None):
     return slot
 
 
+def show_in_slate(mat):
+    """Open the Slate Material Editor and add the material as a node tree, so
+    the artist can SEE the wiring: the VRayMtl and its connected Bitmap /
+    VRayNormalMap / roughness nodes (Slate auto-expands the graph on CreateNode).
+
+    Slate (rt.sme) needs an interactive GUI -- it does not exist in 3dsmaxbatch
+    -- so every call here is fully guarded and returns True/False. It NEVER
+    raises, so a headless/older build just skips it. Reuses a dedicated
+    'MatForge' view and offsets each tree so they don't stack.
+    """
+    sme = getattr(rt, "sme", None)
+    if sme is None:
+        _log("Slate (sme) API unavailable — skipped node view")
+        return False
+    try:
+        sme.Open()
+        view_idx = None
+        try:                                   # reuse our own view if it exists
+            for i in range(1, int(sme.GetNumViews()) + 1):
+                if str(sme.GetView(i).name) == "MatForge":
+                    view_idx = i
+                    break
+        except Exception:
+            pass
+        if view_idx is None:
+            try:
+                view_idx = int(sme.CreateView("MatForge"))
+            except Exception:
+                view_idx = int(getattr(sme, "activeView", 1) or 1)
+        try:
+            sme.activeView = view_idx
+        except Exception:
+            pass
+        view = sme.GetView(view_idx)
+        try:                                   # offset so trees don't overlap
+            n = int(view.GetNumNodes())
+        except Exception:
+            n = 0
+        pos = rt.Point2(float((n % 4) * 320), float((n // 4) * 60))
+        view.CreateNode(mat, pos)              # Slate expands the full graph
+        _log(f"opened '{mat.name}' in Slate (node view)")
+        return True
+    except Exception as e:
+        _log(f"Slate node view skipped: {e}")
+        return False
+
+
 def assign_to_selection(mat, mclass, height_map=None):
     """Assign to selected nodes; add a WORKING VRayDisplacementMod where the
     recipe asks.
@@ -346,7 +393,7 @@ def _validate_manifest(mf):
                                 + ", ".join(missing))
 
 
-def build_from_manifest(manifest_path, slot=None, assign=False):
+def build_from_manifest(manifest_path, slot=None, assign=False, slate=False):
     with open(manifest_path, "r", encoding="utf-8") as f:
         mf = json.load(f)
     _validate_manifest(mf)
@@ -357,4 +404,8 @@ def build_from_manifest(manifest_path, slot=None, assign=False):
         if assign:
             assign_to_selection(mat, mf["class"],
                                 height_map=mf["maps"].get("height"))
-    return {"material": mat.name, "slot": used_slot, "log": list(LOG)}
+    # Slate view is opened OUTSIDE the undo block (opening an editor / laying
+    # out nodes isn't part of the material-create undo transaction).
+    slated = show_in_slate(mat) if slate else False
+    return {"material": mat.name, "slot": used_slot, "log": list(LOG),
+            "slate": slated}

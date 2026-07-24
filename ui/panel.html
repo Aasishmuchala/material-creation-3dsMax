@@ -92,6 +92,7 @@
         <div class="seg" id="eng"><button data-v="fast" class="on">FAST<span class="hint">OFFLINE</span></button>
         <button data-v="ultra">ULTRA<span class="hint">PATINA AI + FABLE-5</span></button></div></div>
       <div class="field"><div class="toggle" id="assign"><div class="sw"></div>Assign to selected objects</div></div>
+      <div class="field"><div class="toggle" id="slate"><div class="sw"></div>Open in Slate ME (show node wiring)</div></div>
       <div class="field"><label class="k">Resolution <span class="hint">final output</span></label>
         <div class="seg" id="res"><button data-v="2k">2K<span class="hint">2048</span></button>
         <button data-v="4k" class="on">4K<span class="hint">4096</span></button>
@@ -153,6 +154,7 @@
     if(c[j].className==="on")return c[j].getAttribute("data-v");}return"";}
 
   var asg=byId("assign");on(asg,"click",function(){asg.className=(asg.className==="toggle on")?"toggle":"toggle on";});
+  var slt=byId("slate");on(slt,"click",function(){slt.className=(slt.className==="toggle on")?"toggle":"toggle on";});
 
   var _payload="",_n=0;
   window.mfGetPayload=function(){return _payload;};
@@ -172,7 +174,8 @@
   on(byId("browse"),"click",function(){cmd("browse");});
   on(byId("go"),"click",function(){
     var p={img:byId("img").value,name:byId("name").value,cls:sel.value,
-      res:segVal("res"),eng:segVal("eng"),assign:(asg.className==="toggle on")};
+      res:segVal("res"),eng:segVal("eng"),assign:(asg.className==="toggle on"),
+      slate:(slt.className==="toggle on")};
     if(!p.img){window.mfStatus("err","Pick a reference image first.");return;}
     window.mfStatus("busy","Generating "+p.res.toUpperCase()+" maps ("+p.eng+")...");
     cmd("create",p);});
