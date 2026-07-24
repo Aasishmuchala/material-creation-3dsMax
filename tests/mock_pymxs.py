@@ -25,10 +25,14 @@ VRAYMTL_PROPS = frozenset({
     "reflection_lockIOR",
     "refraction_ior", "refraction", "refraction_fogColor",
     "refraction_fogMult", "refraction_affectShadows", "refraction_thinWalled",
+    "refraction_glossiness",  # frosted/etched glass (rough refraction)
     "texmap_opacity", "opacity_mode", "texmap_bump", "texmap_bump_multiplier",
     "texmap_displacement", "texmap_displacement_multiplier",
     "sheen_color", "sheen_glossiness", "coat_amount", "coat_glossiness",
-    "translucency_on", "translucency_color", "name",  # V-Ray 7: _on, not bare
+    "translucency_on", "translucency_color",
+    "texmap_self_illumination", "selfIllumination",  # emissive / LED
+    "selfIllumination_multiplier",
+    "name",  # V-Ray 7: _on, not bare
 })
 TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "name"})
 NORMALMAP_PROPS = frozenset({"normal_map", "name"})

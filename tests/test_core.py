@@ -34,8 +34,10 @@ def test_physical_sanity():
         assert 0.0 <= r["metalness"] <= 1.0, name
         assert 0.0 < r["base_roughness"] <= 1.0, name
         # bump_amount is a 0-100 percentage (V-Ray default 30, ~100 = full),
-        # NOT a 0-1 multiplier. A value < 1 would render effectively flat.
-        assert 1.0 <= r["bump_amount"] <= 200.0, f"{name} bump scale wrong"
+        # NOT a 0-1 multiplier. A value < 1 (but non-zero) would render
+        # effectively flat; exactly 0 is a legitimate "no bump" (emissive/glass).
+        assert r["bump_amount"] == 0 or 1.0 <= r["bump_amount"] <= 200.0, (
+            f"{name} bump scale wrong")
         refr = r["refraction"]
         if refr:
             # fog must stay near-white (the saturated-fog trap)

@@ -175,6 +175,12 @@ def build_material(maps, name, mclass):
         if refr.get("thin_walled"):
             _set_first(mat, ["refraction_thinWalled", "thin_walled",
                              "thinWalled"], True, "thin-walled")
+        # frosted/etched glass = rough refraction (glossiness is a roughness
+        # value with brdf_useRoughness ON: higher = more diffuse transmission)
+        if refr.get("glossiness") is not None:
+            _set_first(mat, ["refraction_glossiness", "refractionGlossiness",
+                             "refract_glossiness"], refr["glossiness"],
+                       "refraction glossiness")
 
     # --- opacity (foliage): clip mode = binary cutout, fast ---
     if recipe.get("opacity") and "opacity" in maps:
@@ -232,6 +238,22 @@ def build_material(maps, name, mclass):
                    "translucency mode")
         _set_first(mat, ["translucency_color"], _color(transl["color"]),
                    "translucency color")
+
+    # --- self-illumination (emissive / LED panels) ---
+    si = recipe.get("self_illum")
+    if si:
+        mult = si.get("multiplier", 1.0) if isinstance(si, dict) else 1.0
+        # glow in the reference's own colours: drive self-illum by the albedo
+        if "albedo" in maps:
+            _set_first(mat, ["texmap_self_illumination",
+                             "texmap_selfIllumination"],
+                       _bitmap_tex(maps["albedo"], linear=False),
+                       "self-illum map")
+        _set_first(mat, ["selfIllumination", "self_illumination"],
+                   _color((1.0, 1.0, 1.0)), "self-illum color")
+        _set_first(mat, ["selfIllumination_multiplier",
+                         "self_illumination_multiplier", "selfIllum_mult"],
+                   mult, "self-illum multiplier")
 
     # --- foliage wrap: VRay2SidedMtl, NOT refraction ---
     two = recipe.get("two_sided")

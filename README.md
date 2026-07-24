@@ -78,7 +78,7 @@ maxplugin/builder.py  in-Max pymxs wiring (defensive property candidates)
 maxplugin/forge_max.py  dialog UI
 MAX_SMOKE.py          run inside Max -> SMOKE_OK + property-miss report
 tests/mock_pymxs.py   fake pymxs runtime — exercises builder wiring off-Max
-tests/                53 pytest checks (py -3.12 -m pytest tests)
+tests/                75 pytest checks (py -3.12 -m pytest tests)
 ```
 
 ## What is proven WITHOUT 3ds Max
@@ -100,9 +100,9 @@ Two map backends, same manifest contract (swap freely, Max side unchanged):
   The builder auto-wires the metalness map (`texmap_metalness`) when present.
 
 ## Verify
-- Core + wiring logic: `py -3.12 -m pytest tests -q` → 53 passed
+- Core + wiring logic: `py -3.12 -m pytest tests -q` → 75 passed
 - **Live V-Ray (no GUI):** `3dsmaxbatch.exe -log smoke_batch.log smoke_wrapper.ms`
-  runs `HEADLESS_SMOKE.py` → writes `smoke_result.txt`. Builds all 13 classes
+  runs `HEADLESS_SMOKE.py` → writes `smoke_result.txt`. Builds all 35 classes
   against real V-Ray, reports any property-name misses. **Confirmed `SMOKE_OK`,
   0 misses on 3ds Max 2026 + V-Ray 7.30** (2026-07-22). Kill any interactive
   Max first so the batch can check out the license.
