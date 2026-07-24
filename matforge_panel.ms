@@ -1,4 +1,4 @@
-/*  MatForge panel — hosts the dark web UI (ui/panel.html) in a dockable Max
+/*  MatForge panel - hosts the dark web UI (ui/panel.html) in a dockable Max
     dialog and bridges it to the Python backend.
 
     Bridge protocol (race-free):
@@ -13,10 +13,22 @@ global mfPanelHtml = @"C:\Users\aasis\matforge\ui\panel.html"
 global mfWB
 global mfTimer
 global mfLastTitle = ""
+global mfBackendOk = false
 
-python.Execute "import sys; repo=r'C:\\Users\\aasis\\matforge'; (repo in sys.path) or sys.path.insert(0,repo)"
-python.Execute "import maxplugin.forge_max as fm; import importlib; importlib.reload(fm)"
-python.Execute "fm.set_ie_emulation()"   -- IE11 edge so modern HTML/JS renders
+-- load the Python backend; if this fails, show the REAL error instead of
+-- aborting the whole script silently (that reads as "nothing opened").
+try (
+    python.Execute "import sys; repo=r'C:\\Users\\aasis\\matforge'; (repo in sys.path) or sys.path.insert(0,repo)"
+    python.Execute "import maxplugin.forge_max as fm; import importlib; importlib.reload(fm)"
+    python.Execute "fm.set_ie_emulation()"   -- IE11 edge + unlock local JS
+    mfBackendOk = true
+) catch (
+    local em = "MatForge could not load its Python backend:\n\n"
+    em += (getCurrentException())
+    em += "\n\nTry the native rollout instead (no browser needed):\n"
+    em += "  Scripting > Run Script > run_matforge.py"
+    messageBox em title:"MatForge"
+)
 
 fn mfCall method = ( try ( return mfWB.Document.InvokeScript method ) catch ( return "" ) )
 fn mfBack method a b = ( try ( mfWB.Document.InvokeScript method #(a, b) ) catch () )
@@ -48,7 +60,12 @@ fn mfPoll s e = (
                 default: ()
             )
         )
-    ) catch ()
+    ) catch ( try (format "[MatForge] poll error: %\n" (getCurrentException())) catch () )
+)
+
+fn mfFallbackRollout = (
+    -- webview unavailable -> open the native rollout so the user still has a UI
+    try ( python.ExecuteFile @"C:\Users\aasis\matforge\run_matforge.py" ) catch()
 )
 
 fn mfOpenPanel = (
@@ -56,14 +73,24 @@ fn mfOpenPanel = (
     rollout mfPanelRollout "MatForge" width:460 height:640 (
         dotNetControl wb "System.Windows.Forms.WebBrowser" pos:[0,0] width:460 height:640
         on mfPanelRollout open do (
-            mfWB = wb
-            try (wb.ScrollBarsEnabled = true) catch()
-            try (wb.WebBrowserShortcutsEnabled = false) catch()
-            wb.Navigate mfPanelHtml
-            mfTimer = dotNetObject "System.Windows.Forms.Timer"
-            mfTimer.Interval = 250
-            dotNet.addEventHandler mfTimer "Tick" mfPoll
-            mfTimer.Start()
+            mfLastTitle = ""          -- reset sentinel: JS command counter also
+                                      -- resets on (re)load, else 1st click is lost
+            local wbOk = true
+            try (
+                mfWB = wb
+                try (wb.ScrollBarsEnabled = true) catch()
+                try (wb.WebBrowserShortcutsEnabled = false) catch()
+                wb.Navigate mfPanelHtml
+                mfTimer = dotNetObject "System.Windows.Forms.Timer"
+                mfTimer.Interval = 250
+                dotNet.addEventHandler mfTimer "Tick" mfPoll
+                mfTimer.Start()
+            ) catch ( wbOk = false )
+            if (not wbOk) do (
+                try (destroyDialog mfPanelRollout) catch()
+                messageBox "The embedded browser could not start. Opening the native rollout instead." title:"MatForge"
+                mfFallbackRollout()
+            )
         )
         on mfPanelRollout close do ( try (mfTimer.Stop()) catch() )
     )
@@ -72,4 +99,6 @@ fn mfOpenPanel = (
     try ( cui.DockDialogBar mfPanelRollout #cui_dock_right ) catch()
 )
 
-mfOpenPanel()
+-- only open the webview panel if the backend actually loaded; otherwise the
+-- native rollout is the working fallback (the catch above already explained why)
+if mfBackendOk then mfOpenPanel() else mfFallbackRollout()

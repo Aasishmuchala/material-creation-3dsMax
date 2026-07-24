@@ -88,13 +88,14 @@
       <div class="field"><label class="k">Material name</label>
         <input type="text" id="name" placeholder="e.g. Oak_Floor"></div>
       <div class="field"><label class="k">Material type</label><select id="cls"></select></div>
-      <div class="field"><label class="k">Resolution</label>
-        <div class="seg" id="res"><button data-v="2k">2K</button>
-        <button data-v="4k" class="on">4K</button><button data-v="8k">8K</button></div></div>
       <div class="field"><label class="k">Engine</label>
         <div class="seg" id="eng"><button data-v="fast" class="on">FAST<span class="hint">OFFLINE</span></button>
         <button data-v="ultra">ULTRA<span class="hint">PATINA AI + FABLE-5</span></button></div></div>
       <div class="field"><div class="toggle" id="assign"><div class="sw"></div>Assign to selected objects</div></div>
+      <div class="field"><label class="k">Resolution <span class="hint">final output</span></label>
+        <div class="seg" id="res"><button data-v="2k">2K<span class="hint">2048</span></button>
+        <button data-v="4k" class="on">4K<span class="hint">4096</span></button>
+        <button data-v="8k">8K<span class="hint">8192</span></button></div></div>
       <button class="go" id="go">CREATE MATERIAL &rarr; SPHERE</button>
       <div class="status"><div class="dot" id="dot"></div><div class="stxt" id="stxt">Ready.</div></div>
     </div>

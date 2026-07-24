@@ -57,18 +57,110 @@ def _fal_key():
 
 
 def set_ie_emulation():
-    """Make the .NET WebBrowser render as IE11 edge (default is IE7 doc mode,
-    where the panel's modern HTML/JS wouldn't run). Set before the control is
-    created; takes effect next time the panel opens."""
+    """Prepare the registry so the embedded .NET WebBrowser control renders the
+    panel correctly. Two independent feature-control flags, both keyed by the
+    host process name '3dsmax.exe' (HKCU, no admin needed):
+
+      * FEATURE_BROWSER_EMULATION = 11001  -> render as IE11 'edge' mode
+        (the control defaults to IE7 doc mode, where modern HTML/JS breaks).
+      * FEATURE_LOCALMACHINE_LOCKDOWN = 0  -> DISABLE the Local Machine Zone
+        lockdown. Without this, local file:// HTML loads with ALL active
+        content (JavaScript) blocked -- the panel renders but every button and
+        tab is dead. This is the #1 reason the panel looks 'not working',
+        especially on Windows 11. 0 = feature off = scripts allowed.
+
+    Set before the control is created; takes effect next time the panel opens.
+    Returns True only if BOTH writes succeed."""
+    base = r"Software\Microsoft\Internet Explorer\Main\FeatureControl"
+    flags = (("FEATURE_BROWSER_EMULATION", 11001),
+             ("FEATURE_LOCALMACHINE_LOCKDOWN", 0))
+    ok = True
     try:
         import winreg
-        key = (r"Software\Microsoft\Internet Explorer\Main\FeatureControl"
-               r"\FEATURE_BROWSER_EMULATION")
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as k:
-            winreg.SetValueEx(k, "3dsmax.exe", 0, winreg.REG_DWORD, 11001)
-        return True
+        for feature, val in flags:
+            try:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
+                                      base + "\\" + feature) as k:
+                    winreg.SetValueEx(k, "3dsmax.exe", 0, winreg.REG_DWORD, val)
+            except Exception:
+                ok = False
     except Exception:
         return False
+    return ok
+
+
+PANEL_HTML = os.path.join(_REPO, "ui", "panel.html")
+_SAMPLE = os.path.join(_REPO, "sample_maps", "real_wood.jpg")
+
+
+def diagnose(run_create=False):
+    """Layer-by-layer self-test. Returns a plain multi-line report so the exact
+    point of failure is visible (and pasteable) instead of a vague 'not
+    working'. With run_create=True it also builds a material end-to-end from a
+    bundled sample image, proving the whole Fast pipeline in one shot.
+
+    Called by matforge_diagnose.ms (Scripting > Run Script)."""
+    out = ["MatForge diagnostic", "-" * 46]
+
+    def row(ok, label, extra=""):
+        out.append(("  [OK]  " if ok else "  [FAIL] ") + label +
+                   (("   -- " + extra) if extra else ""))
+
+    # 1. system Python with Pillow + numpy (the map generator runs here)
+    pybin = _python()
+    libs = False
+    try:
+        cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        r = subprocess.run(pybin + ["-c", "import PIL, numpy"],
+                           capture_output=True, timeout=25, creationflags=cflags)
+        libs = (r.returncode == 0)
+    except Exception:
+        pass
+    row(libs, "system Python (%s) + Pillow/numpy" % " ".join(pybin),
+        "" if libs else "install Python 3, then: pip install Pillow numpy")
+
+    # 2. V-Ray present (VRayMtl plugin class resolves)
+    try:
+        vray = bool(rt.execute("(VRayMtl != undefined)"))
+    except Exception:
+        vray = False
+    row(vray, "V-Ray (VRayMtl plugin loaded)",
+        "" if vray else "set V-Ray as the active renderer")
+
+    # 3. keys (both optional; Fast engine needs neither)
+    st = {}
+    try:
+        st = mfconfig.get_keys_status()
+    except Exception:
+        pass
+    row(bool(st.get("fal")), "fal key (Ultra AI engine)",
+        "" if st.get("fal") else "optional - Fast engine needs no key")
+    row(bool(st.get("omega")), "omega key (Fable-5 chat/prompts)",
+        "" if st.get("omega") else "optional")
+
+    # 4. panel asset present
+    row(os.path.isfile(PANEL_HTML), "web panel HTML found",
+        "" if os.path.isfile(PANEL_HTML) else PANEL_HTML)
+
+    # 5. optional full pipeline test on a bundled sample
+    if run_create:
+        out.append("-" * 46)
+        if not os.path.isfile(_SAMPLE):
+            out.append("  live test skipped: no sample image at " + _SAMPLE)
+        else:
+            out.append("  running Fast pipeline on sample_maps/real_wood.jpg ...")
+            try:
+                r = _run_create(_SAMPLE, "MatForge_SelfTest", "wood_interior",
+                                "2k", "fast", True, False)
+                row(r.get("state") == "ok",
+                    "end-to-end create -> " + str(r.get("text", "")))
+            except Exception as e:
+                row(False, "end-to-end create raised: %s" % e)
+
+    out.append("-" * 46)
+    out.append("If a row says FAIL, that layer is the problem. If all pass but")
+    out.append("the panel looked dead, use the native rollout (run_matforge.py).")
+    return "\n".join(out)
 
 
 def _ui():
@@ -77,15 +169,17 @@ def _ui():
 
 def browse_image():
     f = rt.getOpenFileName(
-        caption="MatForge — pick reference image",
+        caption="MatForge - pick reference image",
         types="Images|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;*.webp|All|*.*")
-    if f:
-        _ui().edtImg.text = f
-        # prefill name from filename if empty
-        if not _ui().edtName.text:
-            base = os.path.splitext(os.path.basename(f))[0]
-            _ui().edtName.text = "".join(
-                c if c.isalnum() else "_" for c in base)
+    # Cancel returns MAXScript 'undefined' (truthy via pymxs) -> require a str
+    if not isinstance(f, str) or not f:
+        return
+    _ui().edtImg.text = f
+    # prefill name from filename if empty
+    if not _ui().edtName.text:
+        base = os.path.splitext(os.path.basename(f))[0]
+        _ui().edtName.text = "".join(
+            c if c.isalnum() else "_" for c in base)
 
 
 def _sanitize(name):
@@ -184,6 +278,13 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
 def create_material():
     """Rollout entry point."""
     ui = _ui()
+    # Show feedback and force a repaint BEFORE the blocking subprocess, so Max
+    # doesn't just sit at 'Not Responding' while maps generate (10-60s).
+    ui.lblStatus.text = "Working... generating maps (10-60s), please wait."
+    try:
+        rt.windows.processPostedMessages()
+    except Exception:
+        pass
     r = _run_create(
         img=ui.edtImg.text.strip(),
         name=ui.edtName.text.strip() or "MatForge_Material",
@@ -220,9 +321,9 @@ def browse_for_panel():
     """Open a native file dialog; return the chosen path (bridge sets it in
     the panel via mfImage)."""
     f = rt.getOpenFileName(
-        caption="MatForge — pick reference image",
+        caption="MatForge - pick reference image",
         types="Images|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;*.webp|All|*.*")
-    return f or ""
+    return f if isinstance(f, str) else ""   # Cancel -> 'undefined' (truthy)
 
 
 # The matforge_panel.ms bridge exchanges data via MAXScript globals (avoids
@@ -303,12 +404,12 @@ rollout MatForgeRollout "MatForge v1" width:340
     button btnBrowse "..." width:30 align:#right
     edittext edtName "Name:" fieldWidth:230
     dropdownlist ddClass "Material type:" items:#(%CLASS_ITEMS%)
-    dropdownlist ddRes "Resolution:" items:#("2K (2048)","4K (4096)","8K (8192)") selection:2
     dropdownlist ddEngine "Engine:" items:#("Fast  (offline, no key)","Ultra  (fal PATINA AI)") selection:1
     checkbox chkSeamless "Make seamless (tileable)" checked:true
     checkbox chkAssign "Assign to selected objects" checked:false
+    dropdownlist ddRes "Resolution (final output):" items:#("2K  -  2048 px","4K  -  4096 px","8K  -  8192 px") selection:2
     button btnCreate "Create Material  ->  Editor Sphere" width:320 height:32
-    label lblStatus "Ready." align:#left
+    label lblStatus "Ready." width:320 align:#left
 
     on btnBrowse pressed do python.Execute "import maxplugin.forge_max as _mf; _mf.browse_image()"
     on btnCreate pressed do python.Execute "import maxplugin.forge_max as _mf; _mf.create_material()"
@@ -317,9 +418,20 @@ createDialog MatForgeRollout
 """
 
 
+def _mxs_str(s):
+    """Escape a Python string so it is a safe MAXScript double-quoted literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def show():
-    items = ",".join('"%s"' % label for _, label in _CLASSES)
-    rt.execute(ROLLOUT_MXS.replace("%CLASS_ITEMS%", items))
+    items = ",".join('"%s"' % _mxs_str(label) for _, label in _CLASSES)
+    ok = rt.execute(ROLLOUT_MXS.replace("%CLASS_ITEMS%", items))
+    # rt.execute returns false (not an exception) on a MAXScript COMPILE error,
+    # so the dialog would silently not appear. Surface it instead.
+    if ok is False:
+        raise RuntimeError(
+            "MatForge rollout failed to compile (rt.execute returned false). "
+            "See the MAXScript Listener for the syntax error.")
 
 
 if __name__ == "__main__":
