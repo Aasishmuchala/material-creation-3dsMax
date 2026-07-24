@@ -41,11 +41,12 @@ try (
     python.Execute "import maxplugin.forge_max as fm; fm.set_ie_emulation()"
 ) catch()
 
-messageBox ("MatForge installed.\n\n" + \
+messageBox ("MatForge installed  (works on 3ds Max 2022-2027).\n\n" + \
     "Actions registered under Customize > Toolbars, category 'MatForge':\n" + \
-    "  • MatForge          (the panel)\n" + \
-    "  • MatForge (simple)  (fallback rollout)\n\n" + \
-    "Drag either onto a toolbar for one-click access.\n" + \
-    "Opening the panel now...") title:"MatForge"
+    "  • MatForge          (dark panel: Create / Settings / Help)\n" + \
+    "  • MatForge (simple)  (rollout — use this if the panel won't render)\n\n" + \
+    "Drag either onto a toolbar for one-click access.") title:"MatForge"
 
-if (doesFileExist MatForgePanel) do fileIn MatForgePanel
+-- open the panel, but never let a webview problem break the install
+try ( if (doesFileExist MatForgePanel) do fileIn MatForgePanel )
+catch ( messageBox ("The web panel could not open on this system\n(embedded browser unavailable). Use 'MatForge (simple)' instead:\n\n  python.ExecuteFile @\"" + MatForgeSimple + "\"") title:"MatForge" )

@@ -4,6 +4,23 @@ One click: reference image + name + material type + resolution (2K/4K/8K)
 → PBR maps derived, physically-correct VRayMtl wired, dropped on a
 Material Editor sphere, optionally assigned to selection.
 
+## Compatibility — 3ds Max 2022 → 2027
+- **In-Max code runs on Python 3.7** (Max 2022) through 3.13 (Max 2027) —
+  vermin-verified, no 3.8+ syntax, no type annotations that would break on 3.7.
+- **Map generation runs in a system Python** (auto-resolved: `py -3.12` → `py -3`
+  → `python`, first one that has Pillow+numpy) — never Max's bundled Python, so
+  the Max version doesn't matter. Requires a system Python 3 with `pip install
+  Pillow numpy` (and `fal-client` for the Ultra engine).
+- **V-Ray**: every property is written through defensive candidate lists, so
+  name drift across V-Ray 5/6/7 logs a MISS instead of crashing. Metalness maps
+  need V-Ray 5+ (all supported Max versions ship it). Confirmed `SMOKE_OK` on
+  Max 2026 + V-Ray 7.30.
+- **UI**: the web **panel** needs the embedded IE-based WebBrowser (fine on
+  most setups; the installer sets IE11 emulation). If it won't render (IE
+  removed / newer .NET), the **rollout** — "MatForge (simple)" — is a pure
+  MAXScript UI that works on every version with no browser at all.
+- `pymxs.undo` is used only if present (older builds fall back to a no-op).
+
 ## Install (once)
 1. Open Max 2026 (V-Ray 7 installed).
 2. Scripting > Run Script... > **`install_matforge.ms`** — registers the

@@ -21,12 +21,35 @@ from maxplugin import builder  # noqa: E402
 
 from pymxs import runtime as rt  # noqa: E402
 
-# system interpreter that has Pillow+numpy; edit if your setup differs
-PYTHON_CMD = ["py", "-3.12"]
 CLI = os.path.join(_REPO, "forge_cli.py")     # Fast: deterministic heuristic
 FAL = os.path.join(_REPO, "forge_fal.py")     # Ultra: fal PATINA AI (4K)
 
 _CLASSES = class_choices()  # [(key, label)]
+
+# Map generation runs in a SYSTEM Python (with Pillow+numpy), never Max's own
+# Python — so this works identically on Max 2022 (Py3.7) through 2027 (Py3.13).
+_PYBIN = None
+
+
+def _python():
+    """First system interpreter that has Pillow+numpy. Resolved once and
+    cached, so a box without 'py -3.12' still works via any Python 3."""
+    global _PYBIN
+    if _PYBIN is not None:
+        return _PYBIN
+    cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    for cand in ([["py", "-3.12"], ["py", "-3"], ["python"], ["python3"]]):
+        try:
+            r = subprocess.run(cand + ["-c", "import PIL, numpy"],
+                               capture_output=True, timeout=20,
+                               creationflags=cflags)
+            if r.returncode == 0:
+                _PYBIN = cand
+                return cand
+        except Exception:
+            continue
+    _PYBIN = ["py", "-3.12"]   # fall back; fails later with a clear message
+    return _PYBIN
 
 
 def _fal_key():
@@ -83,6 +106,7 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
 
     env = dict(os.environ)
     extra_note = None
+    pybin = _python()
     if engine == "ultra":
         key = _fal_key()
         if not key:
@@ -93,11 +117,11 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
         upscale = "4" if res in ("4k", "8k") else "2"
         if res == "8k":                    # PATINA's max is 4K
             extra_note = "Ultra caps at 4K — generated at 4096px, not 8K."
-        cmd = PYTHON_CMD + [FAL, img, "--name", name, "--type", mclass,
-                            "--upscale", upscale]
+        cmd = pybin + [FAL, img, "--name", name, "--type", mclass,
+                       "--upscale", upscale]
     else:
-        cmd = PYTHON_CMD + [CLI, img, "--name", name, "--type", mclass,
-                            "--res", res]
+        cmd = pybin + [CLI, img, "--name", name, "--type", mclass,
+                       "--res", res]
         if not seamless:
             cmd.append("--no-seamless")
 
@@ -107,8 +131,8 @@ def _run_create(img, name, mclass, res, engine, seamless, assign):
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               timeout=1800, env=env, creationflags=cflags)
     except FileNotFoundError:
-        return {"state": "err", "text": "System Python not found "
-                "(edit PYTHON_CMD)."}
+        return {"state": "err", "text": "No system Python 3 with Pillow+numpy "
+                "found (install Python 3 + `pip install Pillow numpy`)."}
     except subprocess.TimeoutExpired:
         return {"state": "err", "text": "Map generation timed out."}
     except OSError as e:
