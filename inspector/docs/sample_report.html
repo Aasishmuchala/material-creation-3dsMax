@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Material Inspector report</title><style>
+:root{--paper:#F4F1EA;--ink:#1B1B1A;--grey:#8A8780;--rule:#DAD5CB;--acc:#E5531A}
+@media (prefers-color-scheme:dark){:root{--paper:#1B1B1A;--ink:#F4F1EA;--grey:#A9A59D;--rule:#3a3833}}
+body{background:var(--paper);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:32px 16px}
+main{max-width:1100px;margin:0 auto}
+h1{font:400 34px/1.1 Georgia,serif;margin:0 0 4px} .sub{color:var(--grey);margin:0 0 28px}
+.kpis{display:flex;gap:28px;flex-wrap:wrap;margin-bottom:28px}
+.kpi b{display:block;font:400 30px Georgia,serif} .kpi span{color:var(--grey);font-size:12px}
+table{width:100%;border-collapse:collapse} th{text-align:left;font:500 11px ui-monospace,monospace;color:var(--grey);letter-spacing:.06em;text-transform:uppercase;padding:8px 6px;border-bottom:1px solid var(--ink)}
+td{padding:9px 6px;border-bottom:1px solid var(--rule);vertical-align:top}
+.sev{font:600 11px ui-monospace,monospace;text-transform:uppercase}
+.error .sev{color:var(--acc)} .warning .sev{color:var(--ink)} .info .sev{color:var(--grey)}
+.det{color:var(--grey);font-size:12.5px} code{font-size:12px}
+footer{color:var(--grey);font-size:12px;margin-top:28px}
+.wrap{overflow-x:auto}
+</style></head><body><main>
+<h1>Material Inspector</h1><p class="sub">sample_scene.max (test fixture) · version 0.1.0</p>
+<div class="kpis"><div class='kpi'><b>5</b><span>error</span></div><div class='kpi'><b>2</b><span>warning</span></div><div class='kpi'><b>0</b><span>info</span></div><div class='kpi'><b>6</b><span>fixable</span></div><div class='kpi'><b>1</b><span>materials with errors</span></div></div>
+<div class="wrap"><table><thead><tr><th>Severity</th><th>Rule</th><th>Material</th><th>Finding</th><th>Fix</th></tr></thead>
+<tbody><tr class='error'><td class='sev'>error</td><td><code>R001</code></td><td>Oak floor<br><code>Oak_Glossiness.png</code></td><td>roughness map is loaded as sRGB — it must be linear<div class='det'>Data maps store numbers, not colours. sRGB decoding bends every value (e.g. roughness 0.5 is read as ≈0.21), so the surface looks wrong under any light.</div></td><td>Load this bitmap as linear / Raw (no gamma)</td></tr><tr class='error'><td class='sev'>error</td><td><code>R004</code></td><td>Oak floor<br><code>Oak_NormalGL.png</code></td><td>bump map file is missing<div class='det'>C:/tex/Oak_NormalGL.png</div></td><td>—</td></tr><tr class='error'><td class='sev'>error</td><td><code>R005</code></td><td>Oak floor<br><code>Oak_Glossiness.png</code></td><td>Glossiness map used as roughness — the surface is inverted<div class='det'>Shiny areas render matte and matte areas shiny. Detected from the file name; confirm before fixing.</div></td><td>Switch VRayMtl BRDF &#x27;Use roughness&#x27; to match the map</td></tr><tr class='error'><td class='sev'>error</td><td><code>R006</code></td><td>Oak floor<br><code>Oak_NormalGL.png</code></td><td>Normal map plugged straight into the bump slot<div class='det'>A normal map read as a bump/height map produces noise instead of relief. It needs a VRayNormalMap / CoronaNormal node.</div></td><td>Wrap the bitmap in the renderer&#x27;s normal-map node</td></tr><tr class='error'><td class='sev'>error</td><td><code>R010</code></td><td>Oak floor</td><td>Base colour too dark for a real surface (luminance 8 sRGB)<div class='det'>Below ~30 sRGB nothing real exists except special absorbers; even charcoal and fresh asphalt are ≈39.</div></td><td>Raise to 50 sRGB luminance, keep hue</td></tr><tr class='warning'><td class='sev'>warning</td><td><code>R015</code></td><td>Oak floor</td><td>VRayMtl uses the blinn BRDF — GGX matches real highlights best<div class='det'>Phong/Blinn/Ward lack GGX&#x27;s long highlight tail; scanned and PBR maps assume GGX.</div></td><td>Switch BRDF to GGX</td></tr><tr class='warning'><td class='sev'>warning</td><td><code>R014</code></td><td>Window glass</td><td>Glass has no absorption colour — real glass is never perfectly clear<div class='det'>Clear window glass is green at depth (iron); only low-iron glass is nearly colourless. Without absorption, thick glass and liquids look like plastic.</div></td><td>Apply clear soda-lime absorption (Rubin 1985, 10 mm)</td></tr></tbody></table></div>
+<footer>Checks are on material parameters and texture pixels only — nothing is rendered.</footer>
+</main></body></html>

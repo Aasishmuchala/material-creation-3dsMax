@@ -108,3 +108,15 @@ Two map backends, same manifest contract (swap freely, Max side unchanged):
   Max first so the batch can check out the license.
 - In Max: run `MAX_SMOKE.py` → expect `SMOKE_OK` (or `SMOKE_OK_WITH_MISSES`
   listing V-Ray property names to add to the candidate lists)
+
+
+---
+
+## Material Inspector (`inspector/`) — Phase 1 of the v5 plan
+Scans every VRayMtl / CoronaPhysicalMtl in a scene for physically wrong settings
+(data maps loaded as sRGB, swapped gloss/roughness, normal maps in bump, impossible
+albedo, glass without absorption, IOR out of range, seams, …) and fixes them with
+undo. Shares MatForge's verified V-Ray property names and its `openBitMap(gamma=…)`
+colour handling. Not yet run inside 3ds Max — start with
+`inspector/docs/FIRST_WINDOWS_SESSION.md`. Tests: `cd inspector && python -m pytest -q`.
+Plan documents: `docs/plan/`.

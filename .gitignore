@@ -17,3 +17,7 @@ __pycache__/
 
 # generic tooling, not part of the product
 .claude/
+
+# Material Inspector build output
+inspector/dist/
+.pytest_cache/
