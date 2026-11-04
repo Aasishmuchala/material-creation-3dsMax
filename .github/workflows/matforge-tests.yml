@@ -1,0 +1,46 @@
+name: matforge-tests
+on:
+  push:
+    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
+  pull_request:
+    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # fal-client is optional: tests mock it, so install only the core deps.
+      - run: python -m pip install Pillow numpy pytest
+      - run: python -m pytest tests -q
+  py37-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: In-Max code must parse as Python 3.7
+        run: |
+          python -c "
+          import ast, pathlib
+          files = [pathlib.Path(f) for f in ('HEADLESS_SMOKE.py', 'MAX_SMOKE.py')]
+          for d in ('maxplugin', 'matphys', 'core'):
+              files += sorted(pathlib.Path(d).rglob('*.py'))
+          bad = 0
+          for f in files:
+              try:
+                  ast.parse(f.read_text(encoding='utf-8'), str(f), feature_version=(3, 7))
+              except SyntaxError as e:
+                  bad += 1
+                  print('FAIL', f, e)
+          print(len(files), 'files checked,', bad, 'failed')
+          raise SystemExit(1 if bad else 0)
+          "

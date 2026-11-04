@@ -1,2 +1,4 @@
 -- 3dsmaxbatch entry point: run the headless MatForge smoke via pymxs.
-python.ExecuteFile @"C:\Users\aasis\matforge\HEADLESS_SMOKE.py"
+_root = trimRight (getFilenamePath (getThisScriptFilename())) "\\"
+python.Execute ("import os; os.environ['MATFORGE_ROOT']=r'" + _root + "'")
+python.ExecuteFile (_root + "\\HEADLESS_SMOKE.py")

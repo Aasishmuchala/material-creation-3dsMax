@@ -1,1 +1,3 @@
-python.ExecuteFile @"C:\Users\aasis\matforge\RENDER_HQ.py"
+_root = trimRight (getFilenamePath (getThisScriptFilename())) "\\"
+python.Execute ("import os; os.environ['MATFORGE_ROOT']=r'" + _root + "'")
+python.ExecuteFile (_root + "\\RENDER_HQ.py")

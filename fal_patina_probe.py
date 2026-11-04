@@ -6,7 +6,13 @@ import sys
 
 import fal_client
 
-img = r"C:\Users\aasis\matforge\sample_maps\fal_wood.jpg"
+try:
+    _ROOT = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _ROOT = os.environ.get("MATFORGE_ROOT", "")
+if not _ROOT or not os.path.isdir(_ROOT):
+    sys.exit("MatForge root not found: run from the repo or set MATFORGE_ROOT")
+img = os.path.join(_ROOT, "sample_maps", "fal_wood.jpg")
 if not os.environ.get("FAL_KEY"):
     print("NO FAL_KEY"); sys.exit(1)
 

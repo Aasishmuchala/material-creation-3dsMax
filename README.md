@@ -21,13 +21,36 @@ Material Editor sphere, optionally assigned to selection.
   MAXScript UI that works on every version with no browser at all.
 - `pymxs.undo` is used only if present (older builds fall back to a no-op).
 
-## Install (once)
-1. Open Max 2026 (V-Ray 7 installed).
-2. Scripting > Run Script... > **`install_matforge.ms`** — registers the
-   **MatForge** actions, sets the IE11 emulation the panel needs, and opens it.
-3. For one-click access later: Customize > Customize User Interface > Toolbars,
-   category **MatForge**, drag **MatForge** onto a toolbar. (Max 2025+ dropped
-   the classic menu API, so it's a toolbar button, not a menu.)
+## Install
+MatForge runs from wherever its folder lives; nothing is tied to a user name or
+drive. Needs 3ds Max 2022-2027 (V-Ray 7 and/or Corona) and a system Python 3
+with `pip install -r requirements.txt` (Pillow + numpy) for map generation.
+
+**Bundle route (recommended for other machines)**
+1. On any box with Python 3: `python tools/build_matforge_bundle.py` →
+   `dist/MatForge.bundle` (no keys, tests or notes are shipped; the build
+   refuses if one slips in).
+2. Copy `MatForge.bundle` to `%ProgramData%\Autodesk\ApplicationPlugins\`
+   (or point `ADSK_APPLICATION_PLUGINS` at `dist\` to test) and restart Max.
+   Its startup script registers the **MatForge** actions against the bundle's
+   own `Contents\scripts` folder on every start.
+3. Customize > Customize User Interface > Toolbars, category **MatForge**, drag
+   **MatForge** onto a toolbar. (Max 2025+ dropped the classic menu API, so
+   it's a toolbar button, not a menu.)
+
+**Run-from-repo route (dev box)**
+1. Clone/copy the repo anywhere.
+2. Scripting > Run Script... > **`install_matforge.ms`** from that folder —
+   registers the **MatForge** actions with that folder baked in, sets the IE11
+   emulation the panel needs, and opens the rollout. Re-run it if you move the
+   folder. Then add the toolbar button as in step 3 above.
+
+`run_matforge.py` finds its folder from `__file__`, else the `MATFORGE_ROOT`
+environment variable, else the `MatForgeRoot` global the installer / toolbar
+actions set. Keys: `_keys.json` beside the plugin files if one exists
+(run-from-repo), otherwise per-user `%APPDATA%\MatForge\_keys.json` (where the
+Settings tab saves them on a bundle install). Both are git-ignored and never
+bundled. On-box checks for this: `docs/VERIFY_INSTALL.md`.
 
 ## Use — the panel (dark, three tabs)
 - **CREATE** — pick a reference, name it, choose material type, resolution, and
@@ -42,7 +65,7 @@ Material Editor sphere, optionally assigned to selection.
   → **Create Material → Sphere** drops the wired VRayMtl on a Material Editor
   sphere; tick "Assign to selected objects" to also apply it (+ displacement).
 - **SETTINGS** — paste your **fal** and **omega (Fable-5)** keys; saved to
-  `_keys.json` (git-ignored), overriding the built-in fallback.
+  `_keys.json` (git-ignored; see Install for where), overriding the built-in fallback.
 - **HELP** — a Fable-5 chat for when you're stuck on MatForge / V-Ray / workflow.
 
 A plain rollout (`run_matforge.py`, action "MatForge (simple)") is the fallback
@@ -50,7 +73,9 @@ if the embedded browser won't render on your box.
 
 ## Plugin files
 ```
-install_matforge.ms   run once -> MatForge menu + toolbar actions
+install_matforge.ms   run once (run-from-repo) -> MatForge toolbar actions
+matforge_macros.ms    shared: registers the macros with a resolved folder baked in
+packaging/MatForge.bundle  ApplicationPlugins template (tools/build_matforge_bundle.py)
 matforge_panel.ms     hosts ui/panel.html in a dockable Max webview + bridge
 ui/panel.html         the dark REFGRADE-style control panel
 run_matforge.py       opens the simple rollout (fallback)

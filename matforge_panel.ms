@@ -9,7 +9,9 @@
         result back into the page via InvokeScript.
     The title is never reset by JS, so a command can't be missed between polls. */
 
-global mfPanelHtml = @"C:\Users\aasis\matforge\ui\panel.html"
+-- this file's own folder (repo or bundle); macros / installer also set it
+global MatForgeRoot = trimRight (getFilenamePath (getThisScriptFilename())) "\\/"
+global mfPanelHtml = MatForgeRoot + "\\ui\\panel.html"
 global mfWB
 global mfTimer
 global mfLastTitle = ""
@@ -18,7 +20,7 @@ global mfBackendOk = false
 -- load the Python backend; if this fails, show the REAL error instead of
 -- aborting the whole script silently (that reads as "nothing opened").
 try (
-    python.Execute "import sys; repo=r'C:\\Users\\aasis\\matforge'; (repo in sys.path) or sys.path.insert(0,repo)"
+    python.Execute "import sys; from pymxs import runtime as _rt; repo=str(_rt.MatForgeRoot); (repo in sys.path) or sys.path.insert(0,repo)"
     python.Execute "import maxplugin.forge_max as fm; import importlib; importlib.reload(fm)"
     python.Execute "fm.set_ie_emulation()"   -- IE11 edge + unlock local JS
     mfBackendOk = true
@@ -65,7 +67,7 @@ fn mfPoll s e = (
 
 fn mfFallbackRollout = (
     -- webview unavailable -> open the native rollout so the user still has a UI
-    try ( python.ExecuteFile @"C:\Users\aasis\matforge\run_matforge.py" ) catch()
+    try ( python.ExecuteFile (MatForgeRoot + "\\run_matforge.py") ) catch()
 )
 
 fn mfOpenPanel = (
