@@ -1,12 +1,15 @@
-"""MatForge UI — dockable dialog inside 3ds Max.
+"""MatForge backend for 3ds Max: command building, output parsing, wiring.
 
 Run from Max:  Scripting > Run Script... > matforge/run_matforge.py
 Flow: pick reference image -> name -> class -> 2K/4K/8K -> Create.
 Map generation shells out to system Python (Pillow/numpy live there,
 Max's bundled Python stays untouched); wiring happens in-process.
+The Qt dock (maxplugin.forge_qt) and the classic MAXScript rollout share the
+three halves exposed here: build_command, parse_generator_output, finish_build.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -14,10 +17,12 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
+import matphys  # noqa: E402
 import mfconfig  # noqa: E402
 
-from core.recipes import class_choices  # noqa: E402
+from core.recipes import RECIPES, RESOLUTIONS, class_choices  # noqa: E402
 from maxplugin import builder  # noqa: E402
+from maxplugin.inputs import image_problem, safe_name  # noqa: E402
 
 from pymxs import runtime as rt  # noqa: E402
 
@@ -27,7 +32,7 @@ FAL = os.path.join(_REPO, "forge_fal.py")     # Ultra: fal PATINA AI (4K)
 _CLASSES = class_choices()  # [(key, label)]
 
 # Map generation runs in a SYSTEM Python (with Pillow+numpy), never Max's own
-# Python — so this works identically on Max 2022 (Py3.7) through 2027 (Py3.13).
+# Python, so this works identically on Max 2022 (Py3.7) through 2027 (Py3.13).
 _PYBIN = None
 
 
@@ -56,40 +61,6 @@ def _fal_key():
     return mfconfig.get_fal_key()
 
 
-def set_ie_emulation():
-    """Prepare the registry so the embedded .NET WebBrowser control renders the
-    panel correctly. Two independent feature-control flags, both keyed by the
-    host process name '3dsmax.exe' (HKCU, no admin needed):
-
-      * FEATURE_BROWSER_EMULATION = 11001  -> render as IE11 'edge' mode
-        (the control defaults to IE7 doc mode, where modern HTML/JS breaks).
-      * FEATURE_LOCALMACHINE_LOCKDOWN = 0  -> DISABLE the Local Machine Zone
-        lockdown. Without this, local file:// HTML loads with ALL active
-        content (JavaScript) blocked -- the panel renders but every button and
-        tab is dead. This is the #1 reason the panel looks 'not working',
-        especially on Windows 11. 0 = feature off = scripts allowed.
-
-    Set before the control is created; takes effect next time the panel opens.
-    Returns True only if BOTH writes succeed."""
-    base = r"Software\Microsoft\Internet Explorer\Main\FeatureControl"
-    flags = (("FEATURE_BROWSER_EMULATION", 11001),
-             ("FEATURE_LOCALMACHINE_LOCKDOWN", 0))
-    ok = True
-    try:
-        import winreg
-        for feature, val in flags:
-            try:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
-                                      base + "\\" + feature) as k:
-                    winreg.SetValueEx(k, "3dsmax.exe", 0, winreg.REG_DWORD, val)
-            except Exception:
-                ok = False
-    except Exception:
-        return False
-    return ok
-
-
-PANEL_HTML = os.path.join(_REPO, "ui", "panel.html")
 _SAMPLE = os.path.join(_REPO, "sample_maps", "real_wood.jpg")
 
 
@@ -126,6 +97,15 @@ def diagnose(run_create=False):
         vray = False
     row(vray, "V-Ray (VRayMtl plugin loaded)",
         "" if vray else "set V-Ray as the active renderer")
+    try:
+        corona = bool(rt.execute("(CoronaPhysicalMtl != undefined)"))
+    except Exception:
+        corona = False
+    row(corona, "Corona (CoronaPhysicalMtl plugin loaded)",
+        "" if corona else "optional if V-Ray is present")
+    if not vray and not corona:
+        out.append("  [FAIL] neither renderer found   -- install/enable "
+                   "V-Ray or Corona")
 
     # 3. keys (both optional; Fast engine needs neither)
     st = {}
@@ -134,15 +114,11 @@ def diagnose(run_create=False):
     except Exception:
         pass
     row(bool(st.get("fal")), "fal key (Ultra AI engine)",
-        "" if st.get("fal") else "optional - Fast engine needs no key")
+        "" if st.get("fal") else "optional, Standard needs no key")
     row(bool(st.get("omega")), "omega key (Fable-5 chat/prompts)",
         "" if st.get("omega") else "optional")
 
-    # 4. panel asset present
-    row(os.path.isfile(PANEL_HTML), "web panel HTML found",
-        "" if os.path.isfile(PANEL_HTML) else PANEL_HTML)
-
-    # 5. optional full pipeline test on a bundled sample
+    # 4. optional full pipeline test on a bundled sample
     if run_create:
         out.append("-" * 46)
         if not os.path.isfile(_SAMPLE):
@@ -158,8 +134,8 @@ def diagnose(run_create=False):
                 row(False, "end-to-end create raised: %s" % e)
 
     out.append("-" * 46)
-    out.append("If a row says FAIL, that layer is the problem. If all pass but")
-    out.append("the panel looked dead, use the native rollout (run_matforge.py).")
+    out.append("If a row says FAIL, that layer is the problem. If the dock will "
+               "not open, run forge_max.show_rollout() from the Listener.")
     return "\n".join(out)
 
 
@@ -183,48 +159,194 @@ def browse_image():
 
 
 def _sanitize(name):
-    """Folder-safe material name (Windows rejects : * ? " < > | in paths)."""
-    cleaned = "".join(c if c.isalnum() else "_" for c in name).strip("_")
-    return cleaned or "MatForge_Material"
+    """Folder-safe material name (Windows rejects : * ? " < > | in paths),
+    capped at 48 characters so the map folder stays under MAX_PATH."""
+    return safe_name(name)
 
 
-def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
-    """Shared core used by both the rollout and the web panel. Generates the
-    full slate of maps (heuristic 'fast' or fal-PATINA 'ultra') and wires the
-    VRayMtl onto a Material Editor sphere. With slate=True, also opens the
-    Slate Material Editor showing the node wiring. Returns a result dict:
-      {state: 'ok'|'err', text, material?, slot?, notes?}
+RENDERERS = ("auto", "vray", "corona", "both")
+ENGINES = ("fast", "ultra")
+
+
+def _norm(v):
+    return v.strip().lower() if isinstance(v, str) else v
+
+
+def _check_args(img, mclass, res, engine, renderer, metal):
+    """Validate every field BEFORE map generation (Ultra is a paid fal call).
+    Returns (error_text_or_None, res, engine, renderer, metal) normalised."""
+    renderer, engine, res = _norm(renderer), _norm(engine), _norm(res)
+    if renderer not in RENDERERS:
+        return ("Unknown renderer %r (use auto, vray, corona or both)."
+                % (renderer,), res, engine, renderer, metal)
+    if engine not in ENGINES:
+        return ("Unknown engine %r (use fast or ultra)." % (engine,),
+                res, engine, renderer, metal)
+    if not isinstance(mclass, str) or mclass not in RECIPES:
+        return ("Unknown material type %r." % (mclass,),
+                res, engine, renderer, metal)
+    if not isinstance(res, str) or res not in RESOLUTIONS:
+        return ("Unknown resolution %r (use %s)." % (
+            res, ", ".join(sorted(RESOLUTIONS))), res, engine, renderer, metal)
+    if metal in (None, ""):
+        metal = None
+    elif not isinstance(metal, str) or metal not in matphys.METALS:
+        return ("Unknown metal %r." % (metal,), res, engine, renderer, metal)
+    return image_problem(img), res, engine, renderer, metal
+
+
+def _parse_bool(v, field):
+    """Strict panel boolean: True/False, 1/0, "true"/"false", "1"/"0"."""
+    if v is None or v == "":
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int) and v in (0, 1):
+        return bool(v)
+    if isinstance(v, str) and v.strip().lower() in ("true", "1"):
+        return True
+    if isinstance(v, str) and v.strip().lower() in ("false", "0"):
+        return False
+    raise ValueError("%s must be true or false, got %r" % (field, v))
+
+
+PROGRESS_FLAG = "--progress"
+NO_KEY_TEXT = "Best needs a fal key. Add it in Settings, or use Standard."
+
+
+def _cmd_fail(text, name=None, res=None, engine=None, renderer=None,
+              metal=None):
+    return {"ok": False, "error": text, "argv": [], "env": {},
+            "extra_note": None, "name": name, "res": res, "engine": engine,
+            "renderer": renderer, "metal": metal}
+
+
+def build_command(img, name, mclass, res, engine, seamless, renderer, metal,
+                  progress=False):
+    """Validate every field and build the generator command line. Pure: runs
+    nothing. Never raises. Returns {ok, error, argv, env, extra_note, name,
+    res, engine, renderer, metal} with the last five normalised."""
+    try:
+        name = _sanitize(name or "MatForge_Material")
+        problem, res, engine, renderer, metal = _check_args(
+            img, mclass, res, engine, renderer, metal)
+        if problem:
+            return _cmd_fail(problem, name, res, engine, renderer, metal)
+
+        env = dict(os.environ)
+        extra_note = None
+        pybin = _python()
+        if engine == "ultra":
+            key = _fal_key()
+            if not key:
+                return _cmd_fail(NO_KEY_TEXT, name, res, engine, renderer,
+                                 metal)
+            env["FAL_KEY"] = key
+            upscale = "4" if res in ("4k", "8k") else "2"
+            if res == "8k":                    # PATINA's max is 4K
+                extra_note = "Best caps at 4K, so it was made at 4096 px, not 8K."
+            argv = list(pybin) + [FAL, img, "--name", name, "--type", mclass,
+                                  "--upscale", upscale]
+        else:
+            argv = list(pybin) + [CLI, img, "--name", name, "--type", mclass,
+                                  "--res", res]
+            if not seamless:
+                argv.append("--no-seamless")
+        if progress:
+            argv.append(PROGRESS_FLAG)
+        return {"ok": True, "error": None, "argv": argv, "env": env,
+                "extra_note": extra_note, "name": name, "res": res,
+                "engine": engine, "renderer": renderer, "metal": metal}
+    except Exception as e:
+        return _cmd_fail("Could not prepare the command: %s" % e)
+
+
+def parse_generator_output(stdout_text, returncode=0):
+    """Read the generator's last JSON line. Returns (manifest_path|None,
+    warnings list, error text|None)."""
+    result = None
+    for line in reversed((stdout_text or "").strip().splitlines()):
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and ("manifest" in obj or "ok" in obj):
+            result = obj
+            break
+    if returncode != 0:
+        detail = ""
+        if result is not None and isinstance(result.get("error"), str):
+            detail = result["error"]
+        return None, [], (detail or "see listener")
+    if not result or "manifest" not in result:
+        if result is not None and isinstance(result.get("error"), str) \
+                and result["error"]:
+            return None, [], result["error"]
+        return None, [], "Could not read generator output."
+    warnings = result.get("warnings") or []
+    if not isinstance(warnings, list):
+        warnings = [str(warnings)]
+    return result["manifest"], list(warnings), None
+
+
+def finish_build(manifest, warnings, extra_note, assign, slate, renderer,
+                 metal):
+    """Main-thread half of a build: wire the material from the manifest.
+    Returns the result dict (state 'ok' with material/slot/notes/text/
+    materials/misses/renderer/mclass/maps/assigned) or {state:'err', text}."""
+    try:
+        out = builder.build_from_manifest(manifest, slot=None,
+                                          assign=assign, slate=slate,
+                                          renderer=renderer, metal=metal)
+    except Exception as e:
+        return {"state": "err", "text": "Material wiring failed: %s" % e}
+
+    notes = list(warnings or [])
+    if extra_note:
+        notes.append(extra_note)
+    misses = [l for l in out.get("log", []) if "MISS" in l]
+    if misses:
+        notes.append("%d renderer propert%s could not be set (see listener)" % (
+            len(misses), "y" if len(misses) == 1 else "ies"))
+    if slate and not out.get("slate"):
+        notes.append("Slate node view unavailable (needs an interactive Max "
+                     "session).")
+    maps, mclass = {}, None
+    try:
+        with open(manifest, "r", encoding="utf-8") as f:
+            mf = json.load(f)
+        maps = dict(mf.get("maps") or {})
+        mclass = mf.get("class")
+    except Exception:
+        pass
+    slate_txt = "  + Slate node view" if out.get("slate") else ""
+    return {"state": "ok", "material": out["material"], "slot": out["slot"],
+            "notes": notes,
+            "text": "Done: '%s' -> editor slot %d%s%s" % (
+                out["material"], out["slot"], slate_txt,
+                "  (with notes)" if notes else ""),
+            "materials": list(out.get("materials") or []),
+            "misses": misses, "renderer": out.get("renderer", renderer),
+            "mclass": mclass, "maps": maps, "assigned": bool(assign)}
+
+
+def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False,
+                renderer="auto", metal=None):
+    """Synchronous composition of build_command + subprocess + parse +
+    finish_build; used by the rollout and the fuzz tests. Returns a result
+    dict: {state: 'ok'|'err', text, material?, slot?, notes?, ...}
     """
-    name = _sanitize(name or "MatForge_Material")
-    if not img or not os.path.isfile(img):
-        return {"state": "err", "text": "Pick a reference image first."}
-
-    env = dict(os.environ)
-    extra_note = None
-    pybin = _python()
-    if engine == "ultra":
-        key = _fal_key()
-        if not key:
-            return {"state": "err",
-                    "text": "Ultra (fal PATINA) needs a fal key — add it in "
-                    "Settings, or use Fast."}
-        env["FAL_KEY"] = key
-        upscale = "4" if res in ("4k", "8k") else "2"
-        if res == "8k":                    # PATINA's max is 4K
-            extra_note = "Ultra caps at 4K — generated at 4096px, not 8K."
-        cmd = pybin + [FAL, img, "--name", name, "--type", mclass,
-                       "--upscale", upscale]
-    else:
-        cmd = pybin + [CLI, img, "--name", name, "--type", mclass,
-                       "--res", res]
-        if not seamless:
-            cmd.append("--no-seamless")
+    cmd = build_command(img, name, mclass, res, engine, seamless, renderer,
+                        metal)
+    if not cmd["ok"]:
+        return {"state": "err", "text": cmd["error"]}
 
     # don't flash a console window when launched from the GUI 3dsmax.exe
     cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=1800, env=env, creationflags=cflags)
+        proc = subprocess.run(cmd["argv"], capture_output=True, text=True,
+                              timeout=1800, env=cmd["env"],
+                              creationflags=cflags)
     except FileNotFoundError:
         return {"state": "err", "text": "No system Python 3 with Pillow+numpy "
                 "found (install Python 3 + `pip install Pillow numpy`)."}
@@ -233,51 +355,73 @@ def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
     except OSError as e:
         return {"state": "err", "text": "Could not launch Python: %s" % e}
 
-    if proc.returncode != 0:
-        detail = ""
-        try:
-            detail = json.loads(
-                (proc.stdout or "").strip().splitlines()[-1]).get("error", "")
-        except Exception:
-            pass
-        print("[MatForge] CLI stderr:\n" + (proc.stderr or ""))
-        return {"state": "err",
-                "text": "Map generation failed: " + (detail or "see listener")}
+    manifest, warnings, err = parse_generator_output(proc.stdout,
+                                                     proc.returncode)
+    if err:
+        if proc.returncode != 0:
+            print("[MatForge] CLI stderr:\n" + (proc.stderr or ""))
+            return {"state": "err", "text": "Map generation failed: " + err}
+        return {"state": "err", "text": err}
+    return finish_build(manifest, warnings, cmd["extra_note"], assign, slate,
+                        cmd["renderer"], cmd["metal"])
 
-    result = None
-    for line in reversed((proc.stdout or "").strip().splitlines()):
-        try:
-            obj = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(obj, dict) and ("manifest" in obj or "ok" in obj):
-            result = obj
-            break
-    if not result or "manifest" not in result:
-        return {"state": "err", "text": "Could not read generator output."}
 
+def assign_result(result):
+    """Put the freshly built material on the selected objects (one undo step).
+    Returns (ok, text). Never raises."""
     try:
-        out = builder.build_from_manifest(result["manifest"], slot=None,
-                                          assign=assign, slate=slate)
+        entries = list(result.get("materials") or [])
+        if not entries:
+            return False, "Nothing to assign."
+        entry = entries[0]
+        if len(entries) > 1:
+            det = builder.detect_renderer()
+            for e in entries:
+                if e.get("renderer") == det:
+                    entry = e
+                    break
+        mat = rt.meditMaterials[int(entry["slot"]) - 1]
+        mclass = result.get("mclass")
+        height = (result.get("maps") or {}).get("height")
+        with builder._undo_ctx("MatForge Assign"):
+            if entry.get("renderer") == "corona":
+                from maxplugin import builder_corona
+                n = builder_corona.assign_to_selection(
+                    mat, mclass, height_map=height)
+            else:
+                n = builder.assign_to_selection(mat, mclass,
+                                                height_map=height)
+        if not n:
+            return False, "Nothing is selected."
+        return True, "Put on %d selected objects." % n
     except Exception as e:
-        return {"state": "err", "text": "Material wiring failed: %s" % e}
+        return False, "Could not put it on the selection: %s" % e
 
-    notes = list(result.get("warnings") or [])
-    if extra_note:
-        notes.append(extra_note)
-    misses = [l for l in out.get("log", []) if "MISS" in l]
-    if misses:
-        notes.append("%d V-Ray propert%s could not be set" % (
-            len(misses), "y" if len(misses) == 1 else "ies"))
-    if slate and not out.get("slate"):
-        notes.append("Slate node view unavailable (needs an interactive Max "
-                     "session).")
-    slate_txt = "  + Slate node view" if out.get("slate") else ""
-    return {"state": "ok", "material": out["material"], "slot": out["slot"],
-            "notes": notes,
-            "text": "Done: '%s' -> editor slot %d%s%s" % (
-                out["material"], out["slot"], slate_txt,
-                "  (with notes)" if notes else "")}
+
+def slate_result(result):
+    """Open the built material in Slate. Returns True on success; never
+    raises."""
+    try:
+        mat = rt.meditMaterials[int(result["slot"]) - 1]
+        return bool(builder.show_in_slate(mat))
+    except Exception:
+        return False
+
+
+def renderer_status():
+    """(key, label) for the renderer chip: vray | corona | both | None."""
+    try:
+        has_v = builder._has_class("VRayMtl")
+        has_c = builder._has_class("CoronaPhysicalMtl")
+    except Exception:
+        has_v = has_c = False
+    if has_v and has_c:
+        return "both", "V-Ray and Corona found"
+    if has_v:
+        return "vray", "V-Ray found"
+    if has_c:
+        return "corona", "Corona found"
+    return None, "No renderer found"
 
 
 def create_material():
@@ -298,7 +442,10 @@ def create_material():
         engine=["fast", "ultra"][ui.ddEngine.selection - 1],
         seamless=bool(ui.chkSeamless.checked),
         assign=bool(ui.chkAssign.checked),
-        slate=bool(ui.chkSlate.checked))
+        slate=bool(ui.chkSlate.checked),
+        renderer=["auto", "vray", "corona", "both"][ui.ddRenderer.selection - 1],
+        metal=(None if ui.ddMetal.selection <= 1 else
+               matphys.metal_choices()[ui.ddMetal.selection - 2][0]))
     ui.lblStatus.text = r["text"]
     if r["state"] == "err":
         rt.messageBox(r["text"], title="MatForge")
@@ -307,41 +454,33 @@ def create_material():
                       title="MatForge")
 
 
-# ---- web-panel bridge entry points (called by matforge_panel.ms) ----
-
-def create_from_panel(payload_json):
-    """Called by the panel bridge with a JSON string of params. Returns a
-    compact JSON status string the bridge feeds back to the panel."""
+def _create_from_payload(p):
+    """Validated dict -> _run_create. Never raises; always returns
+    {state, text}. Kept as the fuzz-tested validation surface."""
     try:
-        p = json.loads(payload_json)
-        r = _run_create(img=p.get("img", ""), name=p.get("name", ""),
-                        mclass=p.get("cls", "generic"), res=p.get("res", "4k"),
-                        engine=p.get("eng", "fast"), seamless=True,
-                        assign=bool(p.get("assign")), slate=bool(p.get("slate")))
+        if not isinstance(p, dict):
+            return {"state": "err", "text": "panel error: bad payload"}
+        name = p.get("name", "")
+        return _run_create(img=p.get("img", ""),
+                           name=name if isinstance(name, str) else "",
+                           mclass=p.get("cls", "generic"),
+                           res=p.get("res", "4k"),
+                           engine=p.get("eng", "fast"), seamless=True,
+                           assign=_parse_bool(p.get("assign"), "assign"),
+                           slate=_parse_bool(p.get("slate"), "slate"),
+                           renderer=p.get("rnd", "auto"),
+                           metal=p.get("metal") or None)
     except Exception as e:
-        r = {"state": "err", "text": "panel error: %s" % e}
-    return json.dumps(r)
+        return {"state": "err", "text": "panel error: %s" % e}
 
-
-def browse_for_panel():
-    """Open a native file dialog; return the chosen path (bridge sets it in
-    the panel via mfImage)."""
-    f = rt.getOpenFileName(
-        caption="MatForge - pick reference image",
-        types="Images|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;*.webp|All|*.*")
-    return f if isinstance(f, str) else ""   # Cancel -> 'undefined' (truthy)
-
-
-# The matforge_panel.ms bridge exchanges data via MAXScript globals (avoids
-# fragile string escaping across the JS->title->MAXScript->Python hops).
 
 def chat_reply(question):
-    """Answer a user question via Fable-5 (omega). Used by the Help chat."""
-    system = ("You are the in-panel assistant for MatForge, a 3ds Max + V-Ray "
+    """Answer a user question via Fable-5 (omega). Used by the Settings help field."""
+    system = ("You are the in-panel assistant for MatForge, a 3ds Max + V-Ray or Corona "
               "material-creation plugin (reference image -> physically-correct "
-              "VRayMtl on a Material Editor sphere; Fast=heuristic maps, "
+              "VRayMtl or CoronaPhysicalMtl on a Material Editor sphere; Fast=heuristic maps, "
               "Ultra=fal PATINA AI + Fable-5 prompts). Help the user with "
-              "MatForge, V-Ray materials, and the archviz workflow. Be concise "
+              "MatForge, V-Ray or Corona materials, and the archviz workflow. Be concise "
               "and practical (a few sentences).")
     try:
         return mfconfig.omega_message(
@@ -349,58 +488,6 @@ def chat_reply(question):
             max_tokens=800, system=system, timeout=45)
     except Exception as e:
         return "Chat unavailable: %s (check the omega key in Settings)." % e
-
-
-# --- bridge: MAXScript sets rt.mfBridgePayload from the panel's mfGetPayload,
-#     then calls one of these; results go back via other rt.* globals. ---
-
-def _bridge_browse():
-    rt.mfBridgeImage = browse_for_panel()
-
-
-def _payload():
-    try:
-        return json.loads(str(getattr(rt, "mfBridgePayload", "") or "") or "{}")
-    except Exception:
-        return {}
-
-
-def _bridge_create():
-    p = _payload()
-    try:
-        r = _run_create(p.get("img", ""), p.get("name", ""),
-                        p.get("cls", "generic"), p.get("res", "4k"),
-                        p.get("eng", "fast"), True, bool(p.get("assign")),
-                        slate=bool(p.get("slate")))
-    except Exception as e:
-        r = {"state": "err", "text": "panel error: %s" % e}
-    rt.mfBridgeState = r.get("state", "ok")
-    rt.mfBridgeText = r.get("text", "")
-
-
-def _bridge_savekeys():
-    p = _payload()
-    try:
-        mfconfig.save_keys(fal_key=(p.get("fal") or None),
-                           omega_key=(p.get("omega") or None),
-                           omega_model=(p.get("model") or None))
-        rt.mfBridgeState = "ok"
-        rt.mfBridgeText = "Keys saved."
-    except Exception as e:
-        rt.mfBridgeState = "err"
-        rt.mfBridgeText = "Save failed: %s" % e
-
-
-def _bridge_getkeys():
-    try:
-        rt.mfBridgeText = json.dumps(mfconfig.get_keys_status())
-    except Exception:
-        rt.mfBridgeText = "{}"
-
-
-def _bridge_chat():
-    p = _payload()
-    rt.mfBridgeText = chat_reply(p.get("q", ""))
 
 
 ROLLOUT_MXS = """
@@ -412,6 +499,8 @@ rollout MatForgeRollout "MatForge v1" width:340
     edittext edtName "Name:" fieldWidth:230
     dropdownlist ddClass "Material type:" items:#(%CLASS_ITEMS%)
     dropdownlist ddEngine "Engine:" items:#("Fast  (offline, no key)","Ultra  (fal PATINA AI)") selection:1
+    dropdownlist ddRenderer "Renderer:" items:#("Auto (active renderer)","V-Ray","Corona","Both") selection:1
+    dropdownlist ddMetal "Metal (for metal_ types):" items:#(%METAL_ITEMS%) selection:1
     checkbox chkSeamless "Make seamless (tileable)" checked:true
     checkbox chkAssign "Assign to selected objects" checked:false
     checkbox chkSlate "Open in Slate ME (show node wiring)" checked:false
@@ -431,15 +520,36 @@ def _mxs_str(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def show():
+def _fill_rollout(fill):
+    """Fill %CLASS_ITEMS% / %METAL_ITEMS% in ONE pass, so a label that itself
+    contains a placeholder is never re-expanded."""
+    return re.sub(r"%(CLASS|METAL)_ITEMS%", lambda m: fill[m.group(1)],
+                  ROLLOUT_MXS)
+
+
+def show_rollout():
     items = ",".join('"%s"' % _mxs_str(label) for _, label in _CLASSES)
-    ok = rt.execute(ROLLOUT_MXS.replace("%CLASS_ITEMS%", items))
+    metal_items = ",".join(
+        '"%s"' % _mxs_str(label)
+        for label in ["(from image)"] + [l for _, l in matphys.metal_choices()])
+    ok = rt.execute(_fill_rollout({"CLASS": items, "METAL": metal_items}))
     # rt.execute returns false (not an exception) on a MAXScript COMPILE error,
     # so the dialog would silently not appear. Surface it instead.
     if ok is False:
         raise RuntimeError(
             "MatForge rollout failed to compile (rt.execute returned false). "
             "See the MAXScript Listener for the syntax error.")
+
+
+def show():
+    """Open the Qt dock; fall back to the classic rollout when Qt is missing."""
+    try:
+        from maxplugin import forge_qt
+    except ImportError as e:
+        print("[MatForge] Qt dock unavailable (%s); opening the classic "
+              "rollout." % e)
+        return show_rollout()
+    return forge_qt.show()
 
 
 if __name__ == "__main__":

@@ -3,12 +3,34 @@ Used by forge_fal.py (vision prompts), forge_max.py (chat help + key settings).
 
 Key resolution order: process env -> _keys.json (written by the Settings panel)
 -> Windows env var -> hardcoded _falkey.py/_omegakey.py fallback.
+
+_keys.json location: <MatForge folder>/_keys.json (repo or bundle) if it
+exists, else the per-user %APPDATA%\\MatForge\\_keys.json. New keys are saved
+to the per-user file unless a folder-local one already exists, so a bundle
+installed under %ProgramData% (read-only for most users) still works.
 """
 import json
 import os
 
 _REPO = os.path.dirname(os.path.abspath(__file__))
 _KEYS_PATH = os.path.join(_REPO, "_keys.json")
+
+
+def _user_keys_path():
+    base = os.environ.get("APPDATA")
+    return os.path.join(base, "MatForge", "_keys.json") if base else None
+
+
+def _keys_path(for_write=False):
+    """The _keys.json to use: folder-local if present, else per-user."""
+    user = _user_keys_path()
+    for p in (_KEYS_PATH, user):
+        if p and os.path.isfile(p):
+            return p
+    if for_write and user:
+        return user
+    return _KEYS_PATH
+
 
 OMEGA_DEFAULT_BASE = "https://omega.kesarcloud.in/v1"
 OMEGA_DEFAULT_MODEL = "claude-fable-5"
@@ -17,7 +39,7 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MatForge/1.0"
 
 def _load():
     try:
-        with open(_KEYS_PATH, encoding="utf-8") as f:
+        with open(_keys_path(), encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -70,7 +92,11 @@ def save_keys(fal_key=None, omega_key=None, omega_model=None):
         d["omega_key"] = str(omega_key).strip()
     if omega_model:
         d["omega_model"] = str(omega_model).strip()
-    with open(_KEYS_PATH, "w", encoding="utf-8") as f:
+    path = _keys_path(for_write=True)
+    folder = os.path.dirname(path)
+    if folder and not os.path.isdir(folder):
+        os.makedirs(folder)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
     return True
 

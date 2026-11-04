@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from .recipes import RESOLUTIONS, get_recipe
+import matphys  # noqa: E402  (repo root put on sys.path by .recipes)
 
 # Finite cap (not None): allow generous inputs but refuse decompression bombs.
 # 24576² ~= 600 MP covers any realistic reference; beyond that the native-res
@@ -121,6 +122,50 @@ def derive_albedo(rgb):
     return np.clip(rgb * gain, 0.0, 1.0)
 
 
+def _srgb_to_lin(a):
+    return np.where(a <= 0.04045, a / 12.92,
+                    ((a + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _lin_to_srgb(a):
+    a = np.clip(a, 0.0, 1.0)
+    return np.where(a <= 0.0031308, a * 12.92,
+                    1.055 * np.power(a, 1.0 / 2.4) - 0.055).astype(np.float32)
+
+
+def clamp_albedo(rgb, floor_8bit=matphys.ALBEDO_FLOOR_ERROR,
+                 ceiling_8bit=matphys.ALBEDO_CEILING):
+    """Pull per-pixel albedo luminance into [floor, ceiling] (8-bit sRGB
+    luminance), scaling in linear so hue is preserved.
+
+    Only the first three channels are touched (an alpha channel passes
+    through unchanged). A pixel with any NaN channel has no usable colour:
+    it becomes the neutral floor grey (and counts as changed); +/-inf clip.
+
+    Returns (rgb, fraction_of_pixels_changed).
+    """
+    arr = rgb.astype(np.float32)
+    col = arr[..., :3]
+    nan = np.isnan(col).any(axis=-1)
+    col = np.nan_to_num(col, nan=0.0, posinf=1.0, neginf=0.0)
+    lin = _srgb_to_lin(np.clip(col, 0.0, 1.0))
+    y = (lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152
+         + lin[..., 2] * 0.0722)
+    lo = float(_srgb_to_lin(np.float32(floor_8bit / 255.0)))
+    hi = float(_srgb_to_lin(np.float32(ceiling_8bit / 255.0)))
+    target = np.where(nan, lo, np.clip(y, lo, hi))
+    changed = (target != y) | nan
+    scale = np.where(changed, target / np.maximum(y, 1e-6), 1.0)
+    # pure black (or NaN) has no hue to keep: lift it to a neutral grey
+    black = changed & ((y <= 1e-6) | nan)
+    out = lin * scale[..., None]
+    out = np.where(black[..., None], target[..., None], out)
+    out = np.clip(_lin_to_srgb(out), 0.0, 1.0)
+    if arr.shape[-1] > 3:
+        out = np.concatenate([out, arr[..., 3:]], axis=-1)
+    return out, float(changed.mean())
+
+
 def derive_height(rgb):
     lum = _luminance(rgb)
     # remove global shading trend so height is local relief, not lighting
@@ -175,9 +220,50 @@ def derive_opacity(img):
     return None
 
 
+def _to_rgb8(src):
+    """PIL image -> 8-bit RGB. Single-channel 16-bit ('I;16*', 'I') and float
+    ('F') references are normalised first: PIL's convert('RGB') clips them to
+    0-255, so 16-bit greys came out white and 0-1 floats black.
+
+    Integer modes scale by their nominal range (255 / 65535, else the max);
+    floats already in 0-1 are kept, otherwise scaled by the max. Negative
+    values clip to 0.
+    """
+    mode = src.mode
+    if not (mode.startswith("I") or mode == "F"):
+        return src.convert("RGB")
+    a = np.asarray(src, dtype=np.float64)
+    a = np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0)
+    top = float(a.max()) if a.size else 0.0
+    if mode.startswith("I;16"):
+        scale = 65535.0
+    elif mode == "F" and top <= 1.0:
+        scale = 1.0
+    elif top <= 255.0:
+        scale = 255.0
+    elif top <= 65535.0:
+        scale = 65535.0
+    else:
+        scale = top
+    a = np.clip(a / scale, 0.0, 1.0)
+    return Image.fromarray((a * 255.0 + 0.5).astype(np.uint8)).convert("RGB")
+
+
+def _tick(progress, n, label):
+    if callable(progress):
+        try:
+            progress(n, 3, label)
+        except Exception:
+            pass
+
+
 def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
-                  seamless=True, warnings=None):
+                  seamless=True, warnings=None, name="",
+                  clamp_albedo_range=True, progress=None):
     """Derive the full PBR set. Returns {map_name: absolute_path}.
+
+    `progress`, if callable, is called as progress(n, total, label) at three
+    phase boundaries; exceptions raised by it are swallowed.
 
     If `warnings` is a list, non-fatal advisories (e.g. foliage with no alpha)
     are appended to it for the caller to surface to the artist.
@@ -186,12 +272,24 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
     size = RESOLUTIONS[resolution.lower()]
     os.makedirs(out_dir, exist_ok=True)
 
+    _tick(progress, 1, "Reading the photo")
     src = Image.open(image_path)
     opacity = derive_opacity(src)
-    rgb_img = _resize_square(src.convert("RGB"), size)
+    rgb_img = _resize_square(_to_rgb8(src), size)
     rgb = _to_float(rgb_img)
 
+    _tick(progress, 2, "Making the maps")
     albedo = derive_albedo(rgb)
+    # Emissive / refractive albedos carry intent (glow, tint), so never clamp.
+    if (clamp_albedo_range and recipe["metalness"] < 0.5
+            and not recipe.get("self_illum") and not recipe.get("refraction")
+            and not matphys.is_whitelisted(name)):
+        albedo, frac = clamp_albedo(albedo)
+        if frac > 0.01:
+            msg = ("albedo clamp: %.1f%% of pixels moved into the 30\u2013240 "
+                   "sRGB range" % (frac * 100.0))
+            if warnings is not None:
+                warnings.append(msg)
     height = derive_height(rgb)
     # Measure roughness variation from the DE-LIT albedo, not the raw photo:
     # raw specular highlights (the smoothest spots) would otherwise push
@@ -220,6 +318,7 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
         _to_image(arr).save(path)
         out[name] = os.path.abspath(path)
 
+    _tick(progress, 3, "Saving the maps")
     save("albedo", albedo)
     save("roughness", rough)
     save("normal", normal)

@@ -6,10 +6,12 @@ shows "fix manually".
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from ..core.model import Finding, MaterialRecord, TextureRef
+from ..core.physics import matphys
 from . import props as P
 
 
@@ -105,24 +107,28 @@ class FixApplier:
     def _fix_set_absorption(self, fx, mat, f) -> FixResult:
         color = fx.value["color"]; dist_mm = fx.value["distance_mm"]
         table = P.PARAMS.get(mat.material_class, {})
-        used = self._set(mat.handle, table.get("absorption_color", []), self._rgb(color))
-        if not used:
-            return FixResult(False, "Absorption property not found")
+        mm_per_unit = self._mm_per_scene_unit()
         if "absorption_distance" in table:
-            mm_per_unit = self._mm_per_scene_unit()
+            used = self._set(mat.handle, table.get("absorption_color", []), self._rgb(color))
+            if not used:
+                return FixResult(False, "Absorption property not found")
             self._set(mat.handle, table["absorption_distance"], dist_mm / mm_per_unit)
             return FixResult(True, "Absorption colour and distance set")
-        # V-Ray fog: colour is reached at depth 1/multiplier (scene units). APPROXIMATE —
-        # confirmed in Phase 2 parameter mapping.
-        mm_per_unit = self._mm_per_scene_unit()
-        self._set(mat.handle, table.get("absorption_mult", []), mm_per_unit / dist_mm)
+        # V-Ray fog: one conversion shared with MatForge (matphys). Colour is reached at
+        # depth 1/multiplier (scene units). APPROXIMATE — see docs/VERIFY.md.
+        sigma = tuple(-math.log(min(max(c, 1e-6), 1.0)) / dist_mm for c in color[:3])
+        fog, mult = matphys.to_vray_fog(sigma, dist_mm, mm_per_unit)
+        used = self._set(mat.handle, table.get("absorption_color", []), self._rgb(fog))
+        if not used:
+            return FixResult(False, "Absorption property not found")
+        self._set(mat.handle, table.get("absorption_mult", []), mult)
         return FixResult(True, "Fog colour + multiplier set (approximate until Phase 2 mapping)")
 
     def _fix_insert_normal_node(self, fx, mat, f) -> FixResult:
         t = self._texture(mat, f)
         if t is None or t.handle is None:
             return FixResult(False, "Texture node not found")
-        node_cls = "VRayNormalMap" if mat.renderer.value == "vray" else "CoronaNormal"
+        node_cls = {"vray": "VRayNormalMap", "corona": "CoronaNormal"}.get(mat.renderer.value, "Normal_Bump")
         ctor = getattr(self.rt, node_cls, None)
         if ctor is None:
             return FixResult(False, f"{node_cls} not available in this session")

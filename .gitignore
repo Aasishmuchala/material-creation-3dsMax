@@ -21,3 +21,10 @@ __pycache__/
 # Material Inspector build output
 inspector/dist/
 .pytest_cache/
+.router/
+
+# MatForge bundle build output
+dist/
+
+# local Qt dev env for offscreen UI screenshots (not part of the product)
+.venv-qt/

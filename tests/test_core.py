@@ -11,6 +11,7 @@ from PIL import Image
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
+import matphys  # noqa: E402
 from core import maps as M  # noqa: E402
 from core.recipes import RECIPES, RESOLUTIONS, class_choices, get_recipe  # noqa: E402
 
@@ -200,3 +201,108 @@ def test_cli_end_to_end(ref_image, tmp_path):
         mf = json.load(f)
     assert mf["name"] == "Test_Wood"
     assert os.path.isfile(mf["maps"]["albedo"])
+
+
+# ---------- physics metadata + albedo clamp ----------
+
+def test_recipe_glass_keys_resolve():
+    for name, r in RECIPES.items():
+        refr = r["refraction"]
+        if refr and "glass" in refr:
+            assert refr["glass"] in matphys.GLASS, name
+            assert refr["thickness_mm"] > 0, name
+    assert "glass" not in RECIPES["gemstone"]["refraction"]
+    assert RECIPES["gemstone"]["refraction"]["thickness_mm"] == 10.0
+    assert RECIPES["water"]["refraction"]["thickness_mm"] == 1000.0
+
+
+def test_recipe_metal_keys_valid():
+    for name, r in RECIPES.items():
+        assert r.get("metal") is None or r["metal"] in matphys.METALS, name
+    assert RECIPES["metal_chrome"]["metal"] == "chrome"
+    assert RECIPES["metal_satin"]["metal"] == "stainless_steel"
+    assert RECIPES["metal_brushed"]["metal"] is None
+    assert RECIPES["marble"]["translucency"]["sss_radius_mm"] == 2.0
+    assert RECIPES["wax"]["translucency"]["sss_radius_mm"] == 5.0
+
+
+def _lum8(rgb):
+    return np.array([matphys.srgb_luminance_8bit(tuple(float(c) for c in p))
+                     for p in rgb.reshape(-1, 3)[:1]])[0]
+
+
+def test_clamp_albedo_lifts_dark():
+    img = np.full((16, 16, 3), 0.05, dtype=np.float32)
+    out, frac = M.clamp_albedo(img)
+    assert frac == 1.0
+    assert _lum8(out) >= 29.5
+
+
+def test_clamp_albedo_leaves_midtones():
+    img = np.full((16, 16, 3), 0.5, dtype=np.float32)
+    out, frac = M.clamp_albedo(img)
+    assert frac == 0.0
+    assert np.allclose(out, img, atol=1e-4)
+
+
+def test_clamp_albedo_caps_bright():
+    img = np.full((16, 16, 3), 0.99, dtype=np.float32)
+    out, frac = M.clamp_albedo(img)
+    assert frac == 1.0
+    assert _lum8(out) <= 240.5
+
+
+def _dark_image(tmp_path):
+    p = tmp_path / "dark.png"
+    Image.fromarray(np.full((64, 64, 3), 12, dtype=np.uint8)).save(p)
+    return str(p)
+
+
+def test_dielectric_dark_image_is_clamped_with_warning(tmp_path):
+    warns = []
+    out = M.generate_maps(_dark_image(tmp_path), str(tmp_path / "o"),
+                          mclass="concrete", resolution="2k", seamless=False,
+                          warnings=warns)
+    a = np.asarray(Image.open(out["albedo"]), dtype=np.float32) / 255.0
+    assert _lum8(a) >= 29.0
+    assert any(w.startswith("albedo clamp:") for w in warns)
+
+
+def test_metal_dark_image_not_clamped(tmp_path):
+    out = M.generate_maps(_dark_image(tmp_path), str(tmp_path / "o"),
+                          mclass="metal_brushed", resolution="2k",
+                          seamless=False)
+    a = np.asarray(Image.open(out["albedo"]), dtype=np.float32) / 255.0
+    assert _lum8(a) < 20.0
+
+
+def test_whitelisted_name_skips_clamp(tmp_path):
+    warns = []
+    out = M.generate_maps(_dark_image(tmp_path), str(tmp_path / "o"),
+                          mclass="concrete", resolution="2k", seamless=False,
+                          warnings=warns, name="Fresh_Snow")
+    a = np.asarray(Image.open(out["albedo"]), dtype=np.float32) / 255.0
+    assert _lum8(a) < 20.0
+    assert not any(w.startswith("albedo clamp:") for w in warns)
+
+
+def test_emissive_keeps_pure_black(tmp_path):
+    p = tmp_path / "black.png"
+    Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8)).save(p)
+    warns = []
+    out = M.generate_maps(str(p), str(tmp_path / "o"), mclass="emissive",
+                          resolution="2k", seamless=False, warnings=warns)
+    a = np.asarray(Image.open(out["albedo"]))
+    assert a.max() == 0
+    assert not any(w.startswith("albedo clamp:") for w in warns)
+
+
+@pytest.mark.parametrize("mclass", ["glass_clear", "water"])
+def test_refractive_class_albedo_not_clamped(tmp_path, mclass):
+    warns = []
+    out = M.generate_maps(_dark_image(tmp_path), str(tmp_path / "o"),
+                          mclass=mclass, resolution="2k", seamless=False,
+                          warnings=warns)
+    a = np.asarray(Image.open(out["albedo"]), dtype=np.float32) / 255.0
+    assert _lum8(a) < 20.0
+    assert not any(w.startswith("albedo clamp:") for w in warns)

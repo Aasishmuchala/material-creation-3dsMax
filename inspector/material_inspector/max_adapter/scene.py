@@ -5,6 +5,7 @@ a fake in tests), so this module has no import-time dependency on 3ds Max.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -28,6 +29,28 @@ class SceneReader:
     def __init__(self, rt: Any):
         self.rt = rt
         self.log = ReadLog()
+        self._handles_ok = True
+        self._keepalive: list = []     # id() fallback: keep visited proxies alive so ids stay unique
+        self._truncated = 0
+
+    def key(self, obj):
+        """Stable identity of a Max object for de-duplication.
+
+        pymxs hands out a FRESH Python wrapper on every access, so ``id()`` of a freed
+        wrapper is reused by the next one and would make the walker skip unrelated
+        materials. ``getHandleByAnim`` returns the animatable's handle, which is stable
+        for the session (docs/VERIFY.md row 15). Falls back to ``id()`` — with the
+        wrapper kept alive — only when the call is unavailable, and logs that once.
+        """
+        if self._handles_ok:
+            try:
+                return ("h", int(self.rt.getHandleByAnim(obj)))
+            except Exception as exc:
+                self._handles_ok = False
+                logging.getLogger("material_inspector").warning(
+                    "getHandleByAnim unavailable (%r): de-duplicating by id(), wrappers kept alive", exc)
+        self._keepalive.append(obj)
+        return ("id", id(obj))
 
     # ------------------------------------------------------------ primitives
     def cls(self, obj) -> str:
@@ -58,30 +81,36 @@ class SceneReader:
     # ------------------------------------------------------------ materials
     def materials(self) -> list[MaterialRecord]:
         out: list[MaterialRecord] = []
-        seen: set[int] = set()
-        for m in list(self.rt.sceneMaterials):
-            self._walk(m, "", out, seen)
-        return out
-
-    def _walk(self, m, path: str, out: list, seen: set):
-        if m is None or id(m) in seen:
-            return
-        seen.add(id(m))
-        cls = self.cls(m)
-        name = str(getattr(m, "name", "") or cls)
-        here = f"{path}/{name}" if path else name
-        if cls in P.MATERIAL_CLASSES:
-            out.append(self.read_material(m, cls, here))
-        # descend into Multi/Sub, Blend, VRayBlendMtl, Corona layered, etc.
-        try:
-            n = int(self.rt.getNumSubMtls(m))
-        except Exception:
-            n = 0
-        for i in range(1, n + 1):
-            try:
-                self._walk(self.rt.getSubMtl(m, i), here, out, seen)
-            except Exception:
+        seen: set = set()
+        # explicit stack, depth-first pre-order: nesting depth is not bounded by Python's
+        # recursion limit (a RecursionError used to drop deep materials silently)
+        stack = [(m, "") for m in reversed(list(self.rt.sceneMaterials))]
+        while stack:
+            m, path = stack.pop()
+            if m is None:
                 continue
+            k = self.key(m)
+            if k in seen:
+                continue
+            seen.add(k)
+            cls = self.cls(m)
+            name = str(getattr(m, "name", "") or cls)
+            here = f"{path}/{name}" if path else name
+            if cls in P.MATERIAL_CLASSES:
+                out.append(self.read_material(m, cls, here))
+            # descend into Multi/Sub, Blend, VRayBlendMtl, Corona layered, etc.
+            try:
+                n = int(self.rt.getNumSubMtls(m))
+            except Exception:
+                n = 0
+            subs = []
+            for i in range(1, n + 1):
+                try:
+                    subs.append((self.rt.getSubMtl(m, i), here))
+                except Exception:
+                    continue
+            stack.extend(reversed(subs))
+        return out
 
     def read_material(self, m, cls: str, scene_path: str) -> MaterialRecord:
         rec = MaterialRecord(name=str(getattr(m, "name", cls)), renderer=P.MATERIAL_CLASSES[cls],
@@ -111,29 +140,53 @@ class SceneReader:
         else:
             if raw.get("metalness_mode") is not None:
                 p["metalness"] = 1.0 if int(raw["metalness_mode"]) == 1 else 0.0
+            elif raw.get("metalness") is not None and not isinstance(raw["metalness"], bool):
+                try:   # OpenPBR has no mode enum: the value itself is the metalness
+                    p["metalness"] = float(raw["metalness"])
+                except (TypeError, ValueError):
+                    pass
             if raw.get("refraction_amount") is not None:
                 p["refraction_amount"] = float(raw["refraction_amount"])
             if raw.get("absorption_color") is not None:
                 p["absorption_color"] = self._color(raw["absorption_color"])
         if raw.get("thin_walled") is not None:
             p["thin_walled"] = bool(raw["thin_walled"])
+        if raw.get("complex_ior") is not None:
+            p["complex_ior"] = bool(raw["complex_ior"])
         p["is_legacy"] = cls in P.LEGACY_CLASSES
 
+        seen: set = set()          # texmaps already read for this material (instances, DAGs)
+        self._truncated = 0
         for role, names in P.SLOTS.get(cls, {}).items():
-            tex, _ = self._get(m, cls, f"slot:{role.value}", names)
+            tex, used = self._get(m, cls, f"slot:{role.value}", names)
             if tex is None:
+                continue
+            if used in P.NORMAL_INPUT_SLOTS.get(cls, ()):
+                rec.textures += self.read_texmap(tex, SlotRole.NORMAL, via_normal=True, seen=seen)
                 continue
             eff_role = role
             if cls == "VRayMtl" and role == SlotRole.GLOSSINESS and p.get("use_roughness"):
                 eff_role = SlotRole.ROUGHNESS
-            rec.textures += self.read_texmap(tex, eff_role)
+            rec.textures += self.read_texmap(tex, eff_role, seen=seen)
+        if self._truncated:
+            p["texmap_truncated"] = P.MAX_TEXMAP_DEPTH   # R007
         return rec
 
     # ------------------------------------------------------------ texmaps
     def read_texmap(self, tex, role: SlotRole, depth: int = 0, via_normal: Optional[bool] = None,
-                    flip: Optional[bool] = None) -> list[TextureRef]:
-        if tex is None or depth > P.MAX_TEXMAP_DEPTH:
+                    flip: Optional[bool] = None, seen: Optional[set] = None) -> list[TextureRef]:
+        """Bitmaps feeding one slot. ``seen`` (per material) holds (handle, role, via_normal,
+        flip): an instanced texmap is read once, so shared sub-graphs cost O(nodes), not k^depth."""
+        if tex is None:
             return []
+        if depth > P.MAX_TEXMAP_DEPTH:
+            self._truncated += 1
+            return []
+        seen = set() if seen is None else seen
+        k = (self.key(tex), role, via_normal, flip)
+        if k in seen:
+            return []
+        seen.add(k)
         cls = self.cls(tex)
         if cls in P.BITMAP_CLASSES:
             spec = P.BITMAP_CLASSES[cls]
@@ -158,7 +211,7 @@ class SceneReader:
             inp, _ = self._get(tex, cls, "input", spec["input"])
             fl, _ = self._get(tex, cls, "flip_green", spec["flip_green"])
             return self.read_texmap(inp, SlotRole.NORMAL, depth + 1, True,
-                                    None if fl is None else bool(fl))
+                                    None if fl is None else bool(fl), seen)
         # any other texmap (Output, ColorCorrection, Mix, VRayColor2Bump, ...): descend
         out: list[TextureRef] = []
         try:
@@ -167,7 +220,7 @@ class SceneReader:
             n = 0
         for i in range(1, n + 1):
             try:
-                out += self.read_texmap(self.rt.getSubTexmap(tex, i), role, depth + 1, via_normal, flip)
+                out += self.read_texmap(self.rt.getSubTexmap(tex, i), role, depth + 1, via_normal, flip, seen)
             except Exception:
                 continue
         return out

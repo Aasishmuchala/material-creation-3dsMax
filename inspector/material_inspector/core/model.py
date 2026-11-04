@@ -13,6 +13,7 @@ from typing import Any, Optional
 class Renderer(str, Enum):
     VRAY = "vray"
     CORONA = "corona"
+    OPENPBR = "openpbr"
     OTHER = "other"
 
 
@@ -81,8 +82,10 @@ class TextureRef:
 class MaterialRecord:
     """Canonical view of one material.
 
-    ``params`` uses canonical keys (see ``PARAM_KEYS``). Colours are 0–1 floats in
-    the *display-encoded* (sRGB-like) space of 3ds Max colour swatches.
+    ``params`` uses canonical keys (see ``PARAM_KEYS``). Colours are the raw 0–1
+    stored swatch values (stored/255). 3ds Max stores these scene-linear; the
+    rules that read them document their own convention (R010 reads albedo as
+    8-bit sRGB by design; R011/R018 treat metal swatches as linear F0).
     Missing keys mean "not applicable or not read", never a default.
     """
     name: str
@@ -101,7 +104,7 @@ class MaterialRecord:
 
 
 PARAM_KEYS = {
-    "base_color": "rgb tuple 0–1 (swatch / display space)",
+    "base_color": "rgb tuple 0–1 (raw stored swatch value; Max stores it scene-linear)",
     "roughness": "float 0–1 when the material is in roughness mode",
     "glossiness": "float 0–1 when the material is in glossiness mode",
     "use_roughness": "bool — V-Ray: BRDF 'Use roughness'",
@@ -113,6 +116,7 @@ PARAM_KEYS = {
     "absorption_color": "rgb tuple 0–1 or None (V-Ray fog colour / Corona absorption colour)",
     "absorption_distance": "float scene units or None",
     "thin_walled": "bool",
+    "complex_ior": "bool — Corona: Complex IOR (n,k) on; base colour then unused (R011/R018 skip)",
     "is_legacy": "bool — Corona Legacy Mtl or other superseded type",
 }
 
@@ -135,6 +139,8 @@ class Finding:
     detail: str = ""
     fix: Optional[FixAction] = None
     texture: Optional[str] = None
+    #: Index into the materials list passed to inspect(); filled by inspect(). None for scan-level notes.
+    material_index: Optional[int] = field(default=None, compare=False)
 
     @property
     def fixable(self) -> bool:

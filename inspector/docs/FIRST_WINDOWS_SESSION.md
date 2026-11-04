@@ -40,8 +40,10 @@ python -m material_inspector.devtools.props_check material_inspector_selftest.js
 and correct `material_inspector/max_adapter/props.py` in one pass.
 
 ### 3 · Panel on a real scene (10 min)
-Open any real scene → click **Material Inspector** → **Scan scene** → **Export report…** (HTML and JSON).
-Try **Fix selected** on two findings, then Ctrl+Z to confirm undo works. **Send:** both reports and
+In the Python listener, confirm VERIFY row 15: `rt.getHandleByAnim(rt.sceneMaterials[0])` prints the same integer twice.
+
+Open any real scene → click **Material Inspector** → **Check my scene** → **Export report…** (HTML and JSON).
+Try **Fix** on two findings (or **Fix all**), then Ctrl+Z to confirm undo works. **Send:** both reports and
 `%LOCALAPPDATA%\MeasuredLight\logs\inspector.log`.
 
 ### 4 · Normal-map convention (10 min, one-time)
@@ -49,6 +51,7 @@ For each renderer: new scene, a plane, material with `%TEMP%\material_inspector_
 through VRayNormalMap / CoronaNormal (flip green **off**), one light from the top-left, render.
 If the bumps look raised (lit top-left), that renderer expects **OpenGL**; if sunken, **DirectX**.
 Tell me the two answers; they go into `normal_convention` in the settings file and switch on rule M007.
+Until then every scan with normal maps carries one **M009** info: "M007 inactive until normal_convention is set".
 *(Internal check only — rendering is not part of the product.)*
 
 ### 5 · Batch scan for the false-positive test (30 min + review)

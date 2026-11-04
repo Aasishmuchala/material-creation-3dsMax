@@ -7,7 +7,12 @@ import os
 import sys
 import traceback
 
-_REPO = r"C:\Users\aasis\matforge"
+try:
+    _REPO = os.path.dirname(os.path.abspath(__file__))
+except NameError:  # ExecuteFile from MAXScript may not define __file__
+    _REPO = os.environ.get("MATFORGE_ROOT", "")
+if not _REPO or not os.path.isdir(_REPO):
+    sys.exit("MatForge root not found: run from the repo or set MATFORGE_ROOT")
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 

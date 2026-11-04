@@ -18,7 +18,7 @@ def test_config_overrides_and_warnings(tmp_path):
                              "normal_convention": {"vray": "opengl", "corona": "sideways"}, "extra": 1}))
     opt, warns = load_options(str(p))
     assert opt.config.albedo_ceiling == 230 and opt.disabled_rules == ("R015",)
-    assert opt.normal_convention == {"vray": "opengl", "corona": None}
+    assert opt.normal_convention == {"vray": "opengl", "corona": None, "openpbr": None}
     assert len(warns) == 3
 
 

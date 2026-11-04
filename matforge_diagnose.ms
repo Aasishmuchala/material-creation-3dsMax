@@ -7,11 +7,13 @@
     slots or run the (slow) map generator, so it is safe to run anytime. To see
     a real material built end-to-end, just use the rollout (run_matforge.py).  */
 
+-- this file's own folder (repo or bundle); macros / installer also set it
+global MatForgeRoot = trimRight (getFilenamePath (getThisScriptFilename())) "\\/"
 global mfDiagText = "diagnose did not run"
 
 -- run the layered check; if the backend can't even load, show WHY (readable)
 try (
-    python.Execute "import sys; repo=r'C:\\Users\\aasis\\matforge'; (repo in sys.path) or sys.path.insert(0,repo)"
+    python.Execute "import sys; from pymxs import runtime as _rt; repo=str(_rt.MatForgeRoot); (repo in sys.path) or sys.path.insert(0,repo)"
     python.Execute "import maxplugin.forge_max as fm; import importlib; importlib.reload(fm)"
     python.Execute "import pymxs; pymxs.runtime.mfDiagText = fm.diagnose(run_create=False)"
 ) catch (

@@ -2,7 +2,9 @@
 (
     local here = getFilenamePath (getSourceFileName())
     global MaterialInspector_PyRoot = here
-    python.Execute ("import sys\nroot = r'" + here + "'\nif root not in sys.path: sys.path.insert(0, root)")
+    -- Read the path from the MAXScript global instead of splicing it into a Python
+    -- string: `here` ends in "\", and r'...\' is a Python syntax error.
+    python.Execute "import sys, pymxs\nroot = str(pymxs.runtime.MaterialInspector_PyRoot).rstrip('\\\\/')\nif root not in sys.path: sys.path.insert(0, root)"
 )
 macroScript MaterialInspector
     category:"Measured Light"

@@ -15,6 +15,8 @@ The schemas mirror real V-Ray 6/7 property names (the FIRST candidate in each
 builder list). If the builder's primary candidate ever drifts from a real
 name, these tests surface it as a logged MISS.
 """
+import re
+import types
 
 # Valid property names per node class (isProperty answers from these).
 VRAYMTL_PROPS = frozenset({
@@ -32,8 +34,28 @@ VRAYMTL_PROPS = frozenset({
     "translucency_on", "translucency_color",
     "texmap_self_illumination", "selfIllumination",  # emissive / LED
     "selfIllumination_multiplier",
+    "texmap_diffuse_multiplier",
     "name",  # V-Ray 7: _on, not bare
 })
+# First candidate of every CORONA_MTL entry (maxplugin/corona_props.py).
+CORONA_MTL_PROPS = frozenset({
+    "baseColor", "baseTexmap", "baseTexmapAmount", "roughnessMode",
+    "baseRoughness", "baseRoughnessTexmap", "baseIor", "metalnessMode",
+    "metalnessTexmap", "useComplexIor", "complexIorN", "complexIorK",
+    "edgeColor", "baseAnisotropy", "refractionAmount", "useThinMode",
+    "volumetricAbsorptionColor", "volumetricAbsorptionDistance",
+    "volumetricMode", "sssAmount", "sssRadius", "sssScatterColor",
+    "translucencyFraction", "translucencyColor", "clearcoatAmount",
+    "clearcoatRoughness", "clearcoatIor", "sheenAmount", "sheenColor",
+    "sheenRoughness", "opacityTexmap", "opacityCutout", "baseBumpTexmap",
+    "baseBumpMapAmount", "displacementTexmap", "displacementMinimum",
+    "displacementMaximum", "selfIllumLevel", "selfIllumColor",
+    "selfIllumTexmap",
+    "name",
+})
+CORONA_NORMAL_PROPS = frozenset({"normalMap", "flipGreen", "addGamma", "name"})
+CORONA_BITMAP_PROPS = frozenset({"filename", "gamma", "uvwRandomizer", "name"})
+CORONA_RND_PROPS = frozenset({"name"})
 TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "name"})
 NORMALMAP_PROPS = frozenset({"normal_map", "name"})
 BITMAP_PROPS = frozenset({"filename", "fileName", "bitmap", "name"})
@@ -45,6 +67,10 @@ _SCHEMAS = {
     "VRayNormalMap": NORMALMAP_PROPS,
     "Bitmaptexture": BITMAP_PROPS,
     "VRayDisplacementMod": DISP_PROPS,
+    "CoronaPhysicalMtl": CORONA_MTL_PROPS,
+    "CoronaNormal": CORONA_NORMAL_PROPS,
+    "CoronaBitmap": CORONA_BITMAP_PROPS,
+    "CoronaUvwRandomizer": CORONA_RND_PROPS,
 }
 
 
@@ -185,8 +211,14 @@ class MockUndo:
 
 class MockRuntime:
     def __init__(self, selection=None, active_slot=1, drop=frozenset(),
-                 system_unit="mm"):
+                 system_unit="mm", renderer="vray",
+                 classes=("VRayMtl", "CoronaPhysicalMtl"), gamma=True):
         self._drop = frozenset(drop)
+        self._classes = tuple(classes)
+        self.gammaMgr = types.SimpleNamespace(enable=gamma)
+        self.renderers = types.SimpleNamespace(current=MockNode(
+            {"vray": "V_Ray_7_hotfix_3", "corona": "CoronaRenderer",
+             None: "Default_Scanline_Renderer"}[renderer], frozenset()))
         self.meditMaterials = MockMeditArray()
         self.medit = MockMedit(active_slot)
         self.MatEditor = MockMatEditor()
@@ -214,6 +246,24 @@ class MockRuntime:
 
     def VRayDisplacementMod(self):
         return self._node("VRayDisplacementMod")
+
+    def CoronaPhysicalMtl(self):
+        return self._node("CoronaPhysicalMtl")
+
+    def CoronaNormal(self):
+        return self._node("CoronaNormal")
+
+    def CoronaBitmap(self):
+        return self._node("CoronaBitmap")
+
+    def CoronaUvwRandomizer(self):
+        return self._node("CoronaUvwRandomizer")
+
+    def execute(self, expr):
+        m = re.match(r"^\((\w+) != undefined\)$", str(expr).strip())
+        if m:
+            return m.group(1) in self._classes
+        return None
 
     # --- runtime helpers ---
     def Name(self, s):
@@ -251,7 +301,9 @@ def make_scene_nodes(n):
     return nodes
 
 
-def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
+def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm",
+            renderer="vray", classes=("VRayMtl", "CoronaPhysicalMtl"),
+            gamma=True):
     """Inject a fresh fake `pymxs` into sys.modules and (re)load builder.
 
     Returns (builder_module, runtime). Call once per test for isolation.
@@ -261,7 +313,8 @@ def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
     import types
 
     rt = MockRuntime(selection=selection, active_slot=active_slot, drop=drop,
-                     system_unit=system_unit)
+                     system_unit=system_unit, renderer=renderer,
+                     classes=classes, gamma=gamma)
     fake = types.ModuleType("pymxs")
     fake.runtime = rt
     fake.undo = MockUndo  # pymxs.undo(True, label) -> context manager
@@ -269,4 +322,10 @@ def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
 
     import maxplugin.builder as builder
     importlib.reload(builder)
+    try:
+        import maxplugin.builder_corona as builder_corona
+    except ImportError:
+        builder_corona = None
+    if builder_corona is not None:
+        importlib.reload(builder_corona)
     return builder, rt

@@ -5,12 +5,15 @@ Thresholds come from the audited plan (v3 §3/§6, v5 §6). Every number lives i
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from .colour import scale_to_luminance, srgb_luminance_8bit, srgb_to_linear, luminance_linear
+from .colour import (luminance_linear, scale_to_luminance, srgb_luminance_8bit,
+                     srgb_to_linear)
+from .physics import matphys
 from .model import (COLOR_ROLES, DATA_ROLES, ColorSpace, Finding, FixAction, MaterialRecord,
                     Renderer, Severity, SlotRole)
 
@@ -18,9 +21,10 @@ from .model import (COLOR_ROLES, DATA_ROLES, ColorSpace, Finding, FixAction, Mat
 @dataclass(frozen=True)
 class RuleConfig:
     # Dielectric base colour, one scalar (Rec.709 luminance, sRGB 0–255). PBR Guide pt 2.
-    albedo_floor_error: float = 30.0      # tolerant floor
-    albedo_floor_strict: float = 50.0     # strict floor -> warning band 30–50
-    albedo_ceiling: float = 240.0
+    # Values come from the shared matphys package (one source with MatForge).
+    albedo_floor_error: float = matphys.ALBEDO_FLOOR_ERROR      # tolerant floor
+    albedo_floor_strict: float = matphys.ALBEDO_FLOOR_STRICT    # strict floor -> warning band 30–50
+    albedo_ceiling: float = matphys.ALBEDO_CEILING
     # Raw metals: linear luminance floor (titanium film ≈ 0.41 is the darkest common metal).
     metal_luminance_floor: float = 0.40
     # A constant metalness strictly between these is a "half metal".
@@ -34,11 +38,26 @@ class RuleConfig:
     # Absorption colour this close to white counts as "no absorption".
     white_tolerance: float = 0.02
     # Default absorption offered by the glass fix: clear soda-lime, 10 mm internal
-    # transmittance at 650/550/450 nm (Rubin 1985).
-    soda_lime_absorption: tuple[float, float, float] = (0.85, 0.95, 0.95)
+    # transmittance at 650/550/450 nm (Rubin 1985), from matphys.GLASS["soda_lime"].
+    soda_lime_absorption: tuple[float, float, float] = tuple(
+        round(c, 3) for c in matphys.transmittance(matphys.glass_sigma_mm("soda_lime"), 10.0))
     soda_lime_distance_mm: float = 10.0
     #: Whitelisted material-name tokens allowed above the albedo ceiling.
-    bright_whitelist: tuple[str, ...] = ("snow", "spectralon", "ptfe", "whitereference")
+    bright_whitelist: tuple[str, ...] = tuple(matphys.BRIGHT_WHITELIST)
+    # Largest per-channel linear difference between a named metal's swatch and its measured F0.
+    metal_f0_tolerance: float = 0.10
+    # M005 seam: score = robust z of the wrap step (median / 1.4826·MAD of the interior
+    # adjacent-row/column steps, native pixels) minus seam_tail_ratio × the robust z of the
+    # largest interior step, floored at 0. ERROR when score > seam_z_max. The tail term keeps
+    # plank edges / grout lines on the border quiet (they recur inside the tile). Measured on
+    # the stress corpus: seamless maps score 0; wrap/largest-interior ratio ≤ 1.3 on 11 tileable
+    # families at any cyclic offset.
+    seam_z_max: float = 4.0
+    seam_tail_ratio: float = 1.5
+    #: Experimental checks that stay OFF until removed from this tuple (inspector.json:
+    #: "rules": {"experimental_off": []}). M013 (upscale) is uncalibrated: it misses
+    #: low-contrast 8× upscales and flags native heights with soft bevels (stress B5).
+    experimental_off: tuple[str, ...] = ("M013",)
 
 
 DEFAULT_CONFIG = RuleConfig()
@@ -66,6 +85,37 @@ def filename_says(path: str | None, kind: str) -> bool:
     table = {"rough": _ROUGH_TOKENS, "gloss": _GLOSS_TOKENS,
              "normal": _NORMAL_TOKENS, "height": _HEIGHT_TOKENS}[kind]
     return bool(toks & table)
+
+
+def _finite(v) -> bool:
+    """A real number we can compare (bools are flags, not values)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _finite_colour(c) -> bool:
+    try:
+        return len(c) >= 3 and all(_finite(x) for x in c[:3])
+    except TypeError:
+        return False
+
+
+def _unreadable_reason(path: str) -> str | None:
+    """Why an existing path cannot be loaded as an image, or None (missing paths are R004's
+    ``file_exists`` case; paths that don't exist on this machine are not judged here)."""
+    try:
+        if not os.path.lexists(path):
+            return None
+        if os.path.isdir(path):
+            return "is a folder, not an image file"
+        if not os.path.exists(path):
+            return "is a broken or looping link"
+        if not os.path.isfile(path):
+            return "is not a regular file"
+        if not os.access(path, os.R_OK):
+            return "cannot be read (no permission)"
+    except (OSError, ValueError):
+        return "cannot be checked"
+    return None
 
 
 def _tex_label(t) -> str:
@@ -130,9 +180,21 @@ def unknown_colour_space(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
 
 @rule("R004")
 def missing_file(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
-    return [Finding("R004", Severity.ERROR, m.name, f"{t.role.value} map file is missing",
-                    t.path or "", None, _tex_label(t))
-            for t in m.textures if t.path and t.file_exists is False]
+    out = []
+    for t in m.textures:
+        if not t.path:
+            continue
+        if t.file_exists is False:
+            out.append(Finding("R004", Severity.ERROR, m.name, f"{t.role.value} map file is missing",
+                               t.path, None, _tex_label(t)))
+            continue
+        why = _unreadable_reason(t.path)
+        if why:
+            out.append(Finding("R004", Severity.ERROR, m.name,
+                               f"{t.role.value} map path {why}",
+                               f"{t.path} — the renderer cannot load it, so the slot renders as if empty.",
+                               None, _tex_label(t)))
+    return out
 
 
 @rule("R005")
@@ -183,27 +245,50 @@ def normal_map_in_bump(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
 # ---------------------------------------------------------------- parameter rules
 def _is_metal(m: MaterialRecord, cfg: RuleConfig) -> bool:
     met = m.params.get("metalness")
-    return isinstance(met, (int, float)) and met >= cfg.metal_fraction_high
+    return _finite(met) and met >= cfg.metal_fraction_high
+
+
+@rule("R007")
+def texmap_graph_truncated(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    depth = m.params.get("texmap_truncated")
+    if not depth:
+        return []
+    return [Finding("R007", Severity.INFO, m.name,
+                    f"Texture graph deeper than {depth} levels — deeper maps were not inspected",
+                    "The walker stops at a fixed depth so a looping or huge graph cannot hang the scan. "
+                    "Bitmaps below that depth get no colour-space, missing-file or pixel checks.")]
+
+
+@rule("R008")
+def unreadable_value(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    """NaN / ±inf parameters: the other rules skip them, so say so instead of passing silently."""
+    out = []
+    for k, v in m.params.items():
+        if isinstance(v, bool):
+            continue
+        bad = (isinstance(v, float) and not math.isfinite(v)) or \
+              (isinstance(v, (tuple, list)) and any(isinstance(x, float) and not math.isfinite(x) for x in v))
+        if bad:
+            out.append(Finding("R008", Severity.INFO, m.name,
+                               f"Could not read {k.replace('_', ' ')}: value is {v!r}",
+                               "The value is not a finite number (NaN or infinity), so no rule can judge "
+                               "it. Re-enter the parameter by hand."))
+    return out
 
 
 @rule("R010")
 def albedo_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    # Swatch convention: 3ds Max stores colour params scene-linear (picker
+    # gamma / OCIO is display only). Metal swatches (R011, R018) are therefore
+    # read as linear F0, matching what MatForge writes. The albedo bands below
+    # (R010) read the swatch as 8-bit sRGB BY DESIGN: the 30/50/240 limits are
+    # the published sRGB albedo charts and the tests pin that semantics.
     col = m.params.get("base_color")
-    if col is None or m.has_texture(SlotRole.BASE_COLOR):
-        return []  # textured albedo is checked on the image (map_checks), not the swatch
-    lum = srgb_luminance_8bit(col)
+    if col is None or m.has_texture(SlotRole.BASE_COLOR) or not _finite_colour(col):
+        return []  # textured albedo is checked on the image (map_checks); NaN swatch -> R008
     if _is_metal(m, cfg):
-        y_lin = luminance_linear([srgb_to_linear(c) for c in col])
-        if y_lin < cfg.metal_luminance_floor:
-            target = srgb_luminance_8bit([cfg.metal_luminance_floor ** (1 / 2.2)] * 3)
-            return [Finding("R011", Severity.WARNING, m.name,
-                            f"Metal colour is too dark (linear luminance {y_lin:.2f})",
-                            "Real metals reflect at least ~40 % of light (titanium film is the "
-                            "darkest common metal). Dark 'metals' are usually paint or a wrong map.",
-                            FixAction("set_param", "base_color",
-                                      scale_to_luminance(col, max(target, 170.0)),
-                                      "Raise brightness, keep hue"))]
-        return []
+        return []  # metals: R011 / R018
+    lum = srgb_luminance_8bit(col)
     name = m.name.lower()
     if lum < cfg.albedo_floor_error:
         return [Finding("R010", Severity.ERROR, m.name,
@@ -231,10 +316,78 @@ def albedo_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
     return []
 
 
+@rule("R011")
+def metal_too_dark(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    col = m.params.get("base_color")
+    if col is None or m.has_texture(SlotRole.BASE_COLOR) or not _finite_colour(col) \
+            or not _is_metal(m, cfg):
+        return []
+    if m.params.get("complex_ior"):
+        return []  # Corona Complex IOR: n,k drive the reflectance, base colour unused
+    y_lin = luminance_linear(col)
+    if y_lin >= cfg.metal_luminance_floor:
+        return []
+    target = max(cfg.metal_luminance_floor, srgb_to_linear(170.0 / 255.0))
+    k = target / y_lin if y_lin > 1e-9 else None
+    fixed = (tuple(min(max(c * k, 0.0), 1.0) for c in col[:3]) if k is not None
+             else (target,) * 3)
+    return [Finding("R011", Severity.WARNING, m.name,
+                    f"Metal colour is too dark (linear luminance {y_lin:.2f})",
+                    "Real metals reflect at least ~40 % of light (titanium film is the "
+                    "darkest common metal). Dark 'metals' are usually paint or a wrong map.",
+                    FixAction("set_param", "base_color", fixed,
+                              "Raise brightness, keep hue"))]
+
+
+#: Name token -> matphys.METALS key. Whole tokens only ("alu" matches "Alu_Panel", not "value").
+METAL_TOKENS = {"gold": "gold", "silver": "silver", "copper": "copper", "brass": "brass",
+                "bronze": "bronze", "aluminium": "aluminium", "aluminum": "aluminium",
+                "alu": "aluminium", "chrome": "chrome", "chromium": "chrome", "iron": "iron",
+                "steel": "stainless_steel", "stainless": "stainless_steel",
+                "inox": "stainless_steel", "titanium": "titanium", "nickel": "nickel",
+                "zinc": "zinc", "platinum": "platinum"}
+
+
+def metal_from_name(name: str) -> str | None:
+    """First metal token in the material name (split on non-letters), or None."""
+    for part in re.split(r"[^a-z]+", (name or "").lower()):
+        if part in METAL_TOKENS:
+            return METAL_TOKENS[part]
+    return None
+
+
+@rule("R018")
+def metal_colour_vs_f0(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    """A metal named after a real metal whose swatch is far from that metal's measured F0.
+
+    Warning only: the metal identity is inferred from the material name.
+    """
+    col = m.params.get("base_color")
+    if col is None or not _finite_colour(col) or not _is_metal(m, cfg) \
+            or m.has_texture(SlotRole.BASE_COLOR) or m.params.get("complex_ior"):
+        return []
+    key = metal_from_name(m.name)
+    if key is None:
+        return []
+    f0 = matphys.metal_f0(key)
+    # the swatch is stored scene-linear: compare it to F0 directly, no decode
+    d = max(abs(a - b) for a, b in zip(col, f0))
+    if d <= cfg.metal_f0_tolerance:
+        return []
+    label = matphys.METALS[key]["label"]
+    return [Finding("R018", Severity.WARNING, m.name,
+                    f"Metal colour does not match measured F0 of {label} (max Δ {d:.2f} linear)",
+                    "The base colour of a metal is its reflectance at normal incidence (F0), which "
+                    "is measured. The metal is guessed from the material name — ignore this if the "
+                    "name is not the metal.",
+                    FixAction("set_param", "base_color", tuple(f0),
+                              "Set base colour to measured F0 (650/550/450 nm)"))]
+
+
 @rule("R012")
 def half_metal(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
     met = m.params.get("metalness")
-    if not isinstance(met, (int, float)) or m.has_texture(SlotRole.METALNESS):
+    if not _finite(met) or m.has_texture(SlotRole.METALNESS):
         return []
     if cfg.metal_fraction_low < met < cfg.metal_fraction_high:
         snap = 1.0 if met >= 0.5 else 0.0
@@ -251,7 +404,7 @@ def ior_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
     out = []
     for key in ("ior", "refraction_ior"):
         v = m.params.get(key)
-        if not isinstance(v, (int, float)) or (key == "ior" and _is_metal(m, cfg)):
+        if not _finite(v) or (key == "ior" and _is_metal(m, cfg)):  # NaN / inf -> R008
             continue
         lo, hi = cfg.ior_hard
         slo, shi = cfg.ior_silent
@@ -271,7 +424,7 @@ def ior_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
 @rule("R014")
 def glass_without_absorption(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
     refr = m.params.get("refraction_amount")
-    if not isinstance(refr, (int, float)) or refr < cfg.glass_refraction_threshold:
+    if not _finite(refr) or refr < cfg.glass_refraction_threshold:
         return []
     if m.params.get("thin_walled"):
         return []  # thin sheets (window panes modelled as single planes) need no volume
@@ -301,15 +454,23 @@ def vray_brdf(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
                            "Phong/Blinn/Ward lack GGX's long highlight tail; scanned and PBR maps "
                            "assume GGX.",
                            FixAction("set_param", "brdf", "ggx", "Switch BRDF to GGX")))
+    return out
+
+
+@rule("R016")
+def perfect_mirror(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    if m.renderer != Renderer.VRAY:
+        return []
     if m.params.get("use_roughness") is False and m.has_texture(SlotRole.GLOSSINESS) is False \
             and not m.has_texture(SlotRole.ROUGHNESS):
         g = m.params.get("glossiness")
-        if isinstance(g, (int, float)) and g >= 0.999 and (m.params.get("refraction_amount") or 0) < 0.5:
-            out.append(Finding("R016", Severity.WARNING, m.name,
-                               "Reflection glossiness is exactly 1.0 — a perfect mirror",
-                               "Only mirrors and liquids are this smooth. Polished stone ≈ 0.85–0.95 "
-                               "glossiness; most surfaces need a roughness/glossiness map."))
-    return out
+        refr = m.params.get("refraction_amount")
+        if _finite(g) and g >= 0.999 and (refr if _finite(refr) else 0) < 0.5:
+            return [Finding("R016", Severity.WARNING, m.name,
+                            "Reflection glossiness is exactly 1.0 — a perfect mirror",
+                            "Only mirrors and liquids are this smooth. Polished stone ≈ 0.85–0.95 "
+                            "glossiness; most surfaces need a roughness/glossiness map.")]
+    return []
 
 
 @rule("R017")
