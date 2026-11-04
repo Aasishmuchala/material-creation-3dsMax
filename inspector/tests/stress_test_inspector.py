@@ -19,7 +19,6 @@ import io
 import json
 import math
 import os
-import resource
 import subprocess
 import sys
 import textwrap
@@ -790,7 +789,11 @@ def test_int32_height_is_normalised(tmp_path):
 
 
 _BIG_SCRIPT = textwrap.dedent("""
-    import os, sys, time, resource, json
+    import os, sys, time, json
+    try:
+        import resource            # Unix only; Windows reports peak_rss_mb 0
+    except ImportError:
+        resource = None
     sys.path.insert(0, %(root)r)
     import numpy as np
     from PIL import Image
@@ -804,8 +807,11 @@ _BIG_SCRIPT = textwrap.dedent("""
         TextureRef(SlotRole.NORMAL, p, ColorSpace.LINEAR, via_normal_node=True, file_exists=True),
         TextureRef(SlotRole.DISPLACEMENT, p, ColorSpace.LINEAR, file_exists=True)])
     ids = sorted({f.rule_id for f in pixel_findings(m, InspectorOptions())})
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    rss = rss if sys.platform == "darwin" else rss * 1024
+    if resource is None:
+        rss = 0
+    else:
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss = rss if sys.platform == "darwin" else rss * 1024
     print(json.dumps({"seconds": round(time.time() - t0, 2), "peak_rss_mb": round(rss / 2**20), "ids": ids}))
 """)
 

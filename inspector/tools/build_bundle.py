@@ -53,12 +53,22 @@ def build(out_dir=None):
     return dist
 
 
+def _say(text):
+    """Print even on a console whose code page cannot show every character
+    (a Windows cp1252 console and a destination path with a non-Latin name)."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(text.encode(enc, "replace").decode(enc))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", help="output folder (default: <inspector>/dist)")
     a = ap.parse_args(argv)
     dist = build(a.out)
-    print("Built %s" % dist)
+    _say("Built %s" % dist)
     return 0
 
 

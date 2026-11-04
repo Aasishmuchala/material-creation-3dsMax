@@ -422,7 +422,7 @@ def test_wrapper_scripts_do_not_splice_paths_into_python_literals():
 
 
 def test_maxscript_files_found():
-    rels = {str(p.relative_to(ROOT)) for p in mxs_files()}
+    rels = {p.relative_to(ROOT).as_posix() for p in mxs_files()}   # "/" on Windows too
     assert "install_matforge.ms" in rels
     assert any(r.startswith("packaging/") for r in rels)
     assert any(r.startswith("inspector/bundle/") for r in rels)
