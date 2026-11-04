@@ -62,9 +62,13 @@ def materials_from_folder(folder: str) -> list[MaterialRecord]:
             path = os.path.join(root, fn)
             cs = ColorSpace.SRGB if role in COLOR_ROLES else ColorSpace.LINEAR
             via = True if role == SlotRole.NORMAL else None
-            groups[os.path.join(os.path.relpath(root, folder), name)].append(
+            # Set name = "<sub/folder>/<stem>" with "/" on every platform; a set in the
+            # scanned folder itself is just "<stem>" (os.path.join gave ".\\Bad" on Windows).
+            rel = os.path.relpath(root, folder)
+            key = name if rel == os.curdir else "/".join(rel.split(os.sep) + [name])
+            groups[key].append(
                 TextureRef(role, path, cs, "file", fn, via_normal_node=via, file_exists=True))
-    return [MaterialRecord(name=k.lstrip("./"), renderer=Renderer.OTHER, material_class="texture set",
+    return [MaterialRecord(name=k, renderer=Renderer.OTHER, material_class="texture set",
                            textures=v) for k, v in sorted(groups.items())]
 
 

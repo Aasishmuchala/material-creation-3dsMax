@@ -675,7 +675,9 @@ def _hostile_files(d):
     Image.fromarray((rng.random((2600, 2600, 3)) * 255).astype(np.uint8)).save(P_("big.bmp"))
     out["20 MB BMP"] = "big.bmp"
     Image.fromarray((rng.random((64, 64)) > 0.5)).save(P_("one.png")); out["1-bit"] = "one.png"
-    nm = "wood <>\"' \u00fcn\u00efc\u00f8d\u00e9 \u6728.png"
+    # NTFS forbids < > " in file names, so the hostile name keeps only the legal part on Windows
+    punct = "'" if os.name == "nt" else "<>\"'"
+    nm = "wood %s \u00fcn\u00efc\u00f8d\u00e9 \u6728.png" % punct
     Image.new("RGB", (8, 8)).save(P_(nm)); out["unicode/spaces/<>"] = nm
     return out
 
@@ -1044,6 +1046,8 @@ def test_cli_unreadable_folder_and_file(tmp_path, capsys):
     _save_u8(str(locked / "a_Color.png"), np.full((8, 8, 3), 0.5))
     os.chmod(locked, 0)
     try:
+        if os.access(locked / "a_Color.png", os.R_OK):
+            pytest.skip("POSIX permission bits are not enforced here (Windows, or root)")
         assert cli.main(["check-folder", str(tmp_path)]) == 2     # skipped, no crash
     finally:
         os.chmod(locked, 0o755)

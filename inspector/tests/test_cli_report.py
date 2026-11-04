@@ -51,6 +51,16 @@ def test_folder_check_end_to_end(tmp_path):
     assert "<table>" in out_html.read_text()
 
 
+def test_folder_set_names_are_separator_independent(tmp_path):
+    """A set in the scanned folder is named by its stem; a nested one is "sub/stem" with "/"
+    on every platform (Windows CI found ".\\Bad" turned into "\\Bad")."""
+    make_set(tmp_path, "Top")
+    (tmp_path / "sub" / "deeper").mkdir(parents=True)
+    make_set(tmp_path / "sub" / "deeper", "Nested")
+    names = sorted(m.name for m in cli.materials_from_folder(str(tmp_path)))
+    assert names == ["Top", "sub/deeper/Nested"]
+
+
 def test_report_escapes_html():
     from material_inspector.core.model import Finding, Severity
     f = Finding("R010", Severity.ERROR, "<script>x</script>", "msg & more")
