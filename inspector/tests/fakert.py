@@ -64,6 +64,9 @@ class FakeRT:
     def CoronaNormal(self):
         return Node("CoronaNormal", normalMap=None, flipgreen=False)
 
+    def Normal_Bump(self):
+        return Node("Normal_Bump", normal_map=None, flipgreen=False)
+
     def openBitMap(self, path, gamma=None):
         return Node("Bitmap", gamma=2.2 if gamma is None else float(gamma), filename=path)
 

@@ -50,19 +50,27 @@ try:
             for k in ("albedo", "roughness", "normal", "height", "ao")}
     FOLIAGE = dict(MAPS, opacity=os.path.join(SAMPLE, "albedo.png"))
 
-    have_vray = hasattr(rt, "VRayMtl")
+    try:
+        have_vray = bool(rt.execute("(VRayMtl != undefined)"))
+    except Exception:
+        have_vray = False
     out("MatForge HEADLESS SMOKE")
     out("3ds Max: %s" % str(getattr(rt, "maxVersion", lambda: "?")()))
     out("V-Ray (VRayMtl class present): %s" % have_vray)
+    try:
+        have_corona = bool(rt.execute("(CoronaPhysicalMtl != undefined)"))
+    except Exception:
+        have_corona = False
+    out("Corona (CoronaPhysicalMtl class present): %s" % have_corona)
     out("sample maps exist: %s" % all(os.path.isfile(p)
                                       for p in MAPS.values()))
     out("-" * 60)
 
     all_misses = []
-    if not have_vray:
-        out("SMOKE_FAIL: VRayMtl not found — V-Ray did not load in this "
-            "batch session.")
-    else:
+    if not have_vray and not have_corona:
+        out("SMOKE_FAIL: neither VRayMtl nor CoronaPhysicalMtl found — no "
+            "renderer loaded in this batch session.")
+    elif have_vray:
         for mclass in RECIPES:
             maps = FOLIAGE if RECIPES[mclass].get("opacity") else MAPS
             try:
@@ -94,6 +102,30 @@ try:
         except Exception as e:
             out("  displacement    -> PATH ERROR: %s" % e)
 
+    # Corona loop: same classes through builder_corona (builder.LOG is shared)
+    if have_corona:
+        try:
+            from maxplugin import builder_corona
+            importlib.reload(builder_corona)
+            for mclass in RECIPES:
+                maps = FOLIAGE if RECIPES[mclass].get("opacity") else MAPS
+                try:
+                    mat = builder_corona.build_material(
+                        maps, "HS_C_" + mclass, mclass)
+                    cls = str(rt.classOf(mat))
+                    misses = [l for l in builder.LOG if "MISS" in l]
+                    all_misses += ["corona/%s | %s" % (mclass, m.strip())
+                                   for m in misses]
+                    out("C:%-15s -> %-20s misses=%d"
+                        % (mclass, cls, len(misses)))
+                except Exception as e:
+                    out("C:%-15s -> BUILD ERROR: %s" % (mclass, e))
+                    all_misses.append("corona/%s | EXCEPTION %s" % (mclass, e))
+        except Exception as e:
+            out("C: Corona loop ERROR: %s" % e)
+            all_misses.append("corona | EXCEPTION %s" % e)
+
+    if have_vray or have_corona:
         uniq = sorted(set(all_misses))
         out("-" * 60)
         out("PROPERTY MISSES (%d unique):" % len(uniq))

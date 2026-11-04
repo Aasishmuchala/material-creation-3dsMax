@@ -10,7 +10,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from .colour import scale_to_luminance, srgb_luminance_8bit, srgb_to_linear, luminance_linear
+from .colour import (luminance_linear, scale_to_luminance, srgb_luminance_8bit,
+                     srgb_to_linear)
+from .physics import matphys
 from .model import (COLOR_ROLES, DATA_ROLES, ColorSpace, Finding, FixAction, MaterialRecord,
                     Renderer, Severity, SlotRole)
 
@@ -18,9 +20,10 @@ from .model import (COLOR_ROLES, DATA_ROLES, ColorSpace, Finding, FixAction, Mat
 @dataclass(frozen=True)
 class RuleConfig:
     # Dielectric base colour, one scalar (Rec.709 luminance, sRGB 0–255). PBR Guide pt 2.
-    albedo_floor_error: float = 30.0      # tolerant floor
-    albedo_floor_strict: float = 50.0     # strict floor -> warning band 30–50
-    albedo_ceiling: float = 240.0
+    # Values come from the shared matphys package (one source with MatForge).
+    albedo_floor_error: float = matphys.ALBEDO_FLOOR_ERROR      # tolerant floor
+    albedo_floor_strict: float = matphys.ALBEDO_FLOOR_STRICT    # strict floor -> warning band 30–50
+    albedo_ceiling: float = matphys.ALBEDO_CEILING
     # Raw metals: linear luminance floor (titanium film ≈ 0.41 is the darkest common metal).
     metal_luminance_floor: float = 0.40
     # A constant metalness strictly between these is a "half metal".
@@ -34,11 +37,14 @@ class RuleConfig:
     # Absorption colour this close to white counts as "no absorption".
     white_tolerance: float = 0.02
     # Default absorption offered by the glass fix: clear soda-lime, 10 mm internal
-    # transmittance at 650/550/450 nm (Rubin 1985).
-    soda_lime_absorption: tuple[float, float, float] = (0.85, 0.95, 0.95)
+    # transmittance at 650/550/450 nm (Rubin 1985), from matphys.GLASS["soda_lime"].
+    soda_lime_absorption: tuple[float, float, float] = tuple(
+        round(c, 3) for c in matphys.transmittance(matphys.glass_sigma_mm("soda_lime"), 10.0))
     soda_lime_distance_mm: float = 10.0
     #: Whitelisted material-name tokens allowed above the albedo ceiling.
-    bright_whitelist: tuple[str, ...] = ("snow", "spectralon", "ptfe", "whitereference")
+    bright_whitelist: tuple[str, ...] = tuple(matphys.BRIGHT_WHITELIST)
+    # Largest per-channel linear difference between a named metal's swatch and its measured F0.
+    metal_f0_tolerance: float = 0.10
 
 
 DEFAULT_CONFIG = RuleConfig()
@@ -188,20 +194,29 @@ def _is_metal(m: MaterialRecord, cfg: RuleConfig) -> bool:
 
 @rule("R010")
 def albedo_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    # Swatch convention: 3ds Max stores colour params scene-linear (picker
+    # gamma / OCIO is display only). Metal swatches (R011, R018) are therefore
+    # read as linear F0, matching what MatForge writes. The albedo bands below
+    # (R010) read the swatch as 8-bit sRGB BY DESIGN: the 30/50/240 limits are
+    # the published sRGB albedo charts and the tests pin that semantics.
     col = m.params.get("base_color")
     if col is None or m.has_texture(SlotRole.BASE_COLOR):
         return []  # textured albedo is checked on the image (map_checks), not the swatch
     lum = srgb_luminance_8bit(col)
     if _is_metal(m, cfg):
-        y_lin = luminance_linear([srgb_to_linear(c) for c in col])
+        if m.params.get("complex_ior"):
+            return []  # Corona Complex IOR: n,k drive the reflectance, base colour unused
+        y_lin = luminance_linear(col)
         if y_lin < cfg.metal_luminance_floor:
-            target = srgb_luminance_8bit([cfg.metal_luminance_floor ** (1 / 2.2)] * 3)
+            target = max(cfg.metal_luminance_floor, srgb_to_linear(170.0 / 255.0))
+            k = target / y_lin if y_lin > 1e-9 else None
+            fixed = (tuple(min(c * k, 1.0) for c in col[:3]) if k is not None
+                     else (target,) * 3)
             return [Finding("R011", Severity.WARNING, m.name,
                             f"Metal colour is too dark (linear luminance {y_lin:.2f})",
                             "Real metals reflect at least ~40 % of light (titanium film is the "
                             "darkest common metal). Dark 'metals' are usually paint or a wrong map.",
-                            FixAction("set_param", "base_color",
-                                      scale_to_luminance(col, max(target, 170.0)),
+                            FixAction("set_param", "base_color", fixed,
                                       "Raise brightness, keep hue"))]
         return []
     name = m.name.lower()
@@ -229,6 +244,51 @@ def albedo_range(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
                                   scale_to_luminance(col, cfg.albedo_ceiling),
                                   "Lower to 240 sRGB luminance, keep hue"))]
     return []
+
+
+#: Name token -> matphys.METALS key. Whole tokens only ("alu" matches "Alu_Panel", not "value").
+METAL_TOKENS = {"gold": "gold", "silver": "silver", "copper": "copper", "brass": "brass",
+                "bronze": "bronze", "aluminium": "aluminium", "aluminum": "aluminium",
+                "alu": "aluminium", "chrome": "chrome", "chromium": "chrome", "iron": "iron",
+                "steel": "stainless_steel", "stainless": "stainless_steel",
+                "inox": "stainless_steel", "titanium": "titanium", "nickel": "nickel",
+                "zinc": "zinc", "platinum": "platinum"}
+
+
+def metal_from_name(name: str) -> str | None:
+    """First metal token in the material name (split on non-letters), or None."""
+    for part in re.split(r"[^a-z]+", (name or "").lower()):
+        if part in METAL_TOKENS:
+            return METAL_TOKENS[part]
+    return None
+
+
+@rule("R018")
+def metal_colour_vs_f0(m: MaterialRecord, cfg: RuleConfig) -> list[Finding]:
+    """A metal named after a real metal whose swatch is far from that metal's measured F0.
+
+    Warning only: the metal identity is inferred from the material name.
+    """
+    col = m.params.get("base_color")
+    if col is None or not _is_metal(m, cfg) or m.has_texture(SlotRole.BASE_COLOR) \
+            or m.params.get("complex_ior"):
+        return []
+    key = metal_from_name(m.name)
+    if key is None:
+        return []
+    f0 = matphys.metal_f0(key)
+    # the swatch is stored scene-linear: compare it to F0 directly, no decode
+    d = max(abs(a - b) for a, b in zip(col, f0))
+    if d <= cfg.metal_f0_tolerance:
+        return []
+    label = matphys.METALS[key]["label"]
+    return [Finding("R018", Severity.WARNING, m.name,
+                    f"Metal colour does not match measured F0 of {label} (max Δ {d:.2f} linear)",
+                    "The base colour of a metal is its reflectance at normal incidence (F0), which "
+                    "is measured. The metal is guessed from the material name — ignore this if the "
+                    "name is not the metal.",
+                    FixAction("set_param", "base_color", tuple(f0),
+                              "Set base colour to measured F0 (650/550/450 nm)"))]
 
 
 @rule("R012")

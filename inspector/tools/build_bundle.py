@@ -17,4 +17,7 @@ if DIST.exists():
 shutil.copytree(SRC_BUNDLE, DIST)
 shutil.copytree(ROOT / "material_inspector", DIST / "Contents" / "scripts" / "material_inspector",
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+# shared physics tables (repo-root matphys/), imported by material_inspector.core.physics
+shutil.copytree(ROOT.parent / "matphys", DIST / "Contents" / "scripts" / "matphys",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 print(f"Built {DIST}")

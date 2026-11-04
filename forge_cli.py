@@ -44,7 +44,8 @@ def main(argv=None):
         warnings = []
         maps = generate_maps(args.image, out_dir, mclass=args.mclass,
                              resolution=args.res,
-                             seamless=not args.no_seamless, warnings=warnings)
+                             seamless=not args.no_seamless, warnings=warnings,
+                             name=args.name)
         manifest = {"schema": 1, "name": args.name, "class": args.mclass,
                     "res": args.res, "maps": maps, "warnings": warnings}
         manifest_path = os.path.join(out_dir, "manifest.json")

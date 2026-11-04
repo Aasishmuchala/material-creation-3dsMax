@@ -1,9 +1,9 @@
 name: inspector-tests
 on:
   push:
-    paths: ['inspector/**', '.github/workflows/inspector-tests.yml']
+    paths: ['inspector/**', 'matphys/**', '.github/workflows/inspector-tests.yml']
   pull_request:
-    paths: ['inspector/**']
+    paths: ['inspector/**', 'matphys/**']
 jobs:
   core:
     strategy:

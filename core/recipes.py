@@ -15,6 +15,14 @@ Units:
                      displacement percentage). 0 = no displacement.
 Colors are 0-1 RGB floats.
 """
+import os
+import sys
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+
+import matphys  # noqa: E402
 
 RESOLUTIONS = {"2k": 2048, "4k": 4096, "8k": 8192}
 
@@ -65,7 +73,8 @@ RECIPES = {
         "bump_amount": 10.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
         # thin translucency sells marble; wired as VRayMtl translucency
-        "translucency": {"color": (0.93, 0.91, 0.88), "amount": 0.15},
+        "translucency": {"color": (0.93, 0.91, 0.88), "amount": 0.15,
+                         "sss_radius_mm": 2.0},
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
     },
@@ -76,6 +85,7 @@ RECIPES = {
         "bump_amount": 20.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
         "anisotropy": 0.55,
+        "metal": None,  # named metal (matphys.METALS key) or None = from image
         "coat": None, "sheen": None, "self_illum": False,
         # albedo map drives the tint for metals
         "reflect_color": (1.0, 1.0, 1.0),
@@ -99,7 +109,8 @@ RECIPES = {
         # saturated-fog trap turns glass into opaque paint.
         "refraction": {"ior": 1.52, "thin_walled": True,
                        "fog_color": (0.98, 1.0, 0.985), "fog_mult": 0.05,
-                       "affect_shadows": True},
+                       "affect_shadows": True,
+                       "glass": "soda_lime", "thickness_mm": 6.0},
         "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
@@ -195,7 +206,8 @@ RECIPES = {
         "bump_amount": 6.0, "displacement_mm": 0.0,
         "refraction": {"ior": 1.52, "thin_walled": True,
                        "fog_color": (0.98, 1.0, 0.99), "fog_mult": 0.04,
-                       "affect_shadows": True, "glossiness": 0.60},
+                       "affect_shadows": True, "glossiness": 0.60,
+                       "glass": "soda_lime", "thickness_mm": 6.0},
         "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
@@ -207,7 +219,7 @@ RECIPES = {
         "bump_amount": 2.0, "displacement_mm": 0.0,
         "refraction": {"ior": 1.80, "thin_walled": False,
                        "fog_color": (0.97, 0.99, 1.0), "fog_mult": 0.06,
-                       "affect_shadows": True},
+                       "affect_shadows": True, "thickness_mm": 10.0},
         "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
@@ -219,7 +231,8 @@ RECIPES = {
         "bump_amount": 8.0, "displacement_mm": 0.0,
         "refraction": {"ior": 1.33, "thin_walled": False,
                        "fog_color": (0.96, 0.99, 1.0), "fog_mult": 0.02,
-                       "affect_shadows": True},
+                       "affect_shadows": True,
+                       "glass": "water", "thickness_mm": 1000.0},
         "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
@@ -233,6 +246,7 @@ RECIPES = {
         "bump_amount": 4.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
+        "metal": "chrome",
         "reflect_color": (1.0, 1.0, 1.0),
     },
     "metal_satin": {
@@ -242,6 +256,7 @@ RECIPES = {
         "bump_amount": 8.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
         "coat": None, "sheen": None, "self_illum": False,
+        "metal": "stainless_steel",
         "reflect_color": (1.0, 1.0, 1.0),
     },
     "metal_rust": {
@@ -358,7 +373,8 @@ RECIPES = {
         "base_roughness": 0.35, "roughness_variation": 0.10,
         "bump_amount": 10.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
-        "translucency": {"color": (0.95, 0.90, 0.80), "amount": 0.50},
+        "translucency": {"color": (0.95, 0.90, 0.80), "amount": 0.50,
+                         "sss_radius_mm": 5.0},
         "coat": None, "sheen": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
     },
@@ -385,16 +401,18 @@ RECIPES = {
 }
 
 # Physical reference constants kept alongside for future classes / validation.
+# Dielectric IORs come from matphys.glass; the rest are literal.
 IOR_TABLE = {
-    "water": 1.33, "ice": 1.31, "glass_window": 1.52, "glass_crystal": 1.62,
+    "water": matphys.glass_ior("water"), "ice": matphys.glass_ior("ice"),
+    "glass_window": matphys.glass_ior("soda_lime"),
+    "glass_crystal": matphys.glass_ior("lead_crystal"),
     "acrylic": 1.49, "diamond": 2.42, "sapphire": 1.77, "olive_oil": 1.47,
 }
 
-METAL_TINTS = {
-    "gold": (1.00, 0.78, 0.34), "silver": (0.97, 0.96, 0.91),
-    "copper": (0.95, 0.64, 0.54), "aluminum": (0.91, 0.92, 0.92),
-    "iron": (0.56, 0.57, 0.58),
-}
+# Measured linear F0 per metal (650/550/450 nm), one source: matphys.metals.
+METAL_TINTS = {k: matphys.metal_f0(k)
+               for k in ("gold", "silver", "copper", "aluminium", "iron")}
+METAL_TINTS["aluminum"] = METAL_TINTS["aluminium"]
 
 
 def get_recipe(mclass):

@@ -91,6 +91,11 @@
       <div class="field"><label class="k">Engine</label>
         <div class="seg" id="eng"><button data-v="fast" class="on">FAST<span class="hint">OFFLINE</span></button>
         <button data-v="ultra">ULTRA<span class="hint">PATINA AI + FABLE-5</span></button></div></div>
+      <div class="field"><label class="k">Renderer</label>
+        <div class="seg" id="rnd"><button data-v="auto" class="on">AUTO<span class="hint">ACTIVE RENDERER</span></button>
+        <button data-v="vray">V-RAY</button><button data-v="corona">CORONA</button><button data-v="both">BOTH</button></div></div>
+      <div class="field" id="metalField" style="display:none"><label class="k">Metal <span class="hint">measured n,k</span></label>
+        <select id="metal"></select></div>
       <div class="field"><div class="toggle" id="assign"><div class="sw"></div>Assign to selected objects</div></div>
       <div class="field"><div class="toggle" id="slate"><div class="sw"></div>Open in Slate ME (show node wiring)</div></div>
       <div class="field"><label class="k">Resolution <span class="hint">final output</span></label>
@@ -139,8 +144,16 @@
     ["velvet","Velvet"],["carpet","Carpet / rug"],["paper","Paper / cardboard"],["cork","Cork"],
     ["asphalt","Asphalt / tarmac"],["sand","Sand / gravel / soil"],["wax","Wax / candle / soap (SSS)"],
     ["emissive","Emissive / LED panel"],["generic","Generic dielectric"]];
+  var METALS=[["","(from image)"],["gold","Gold"],["silver","Silver"],["copper","Copper"],["aluminium","Aluminium"],
+    ["chrome","Chrome"],["iron","Iron"],["titanium","Titanium"],["nickel","Nickel"],["zinc","Zinc"],["brass","Brass"],
+    ["bronze","Bronze"],["platinum","Platinum"],["stainless_steel","Stainless steel"]];
   var sel=document.getElementById("cls"),i,o;
   for(i=0;i<CLASSES.length;i++){o=document.createElement("option");o.value=CLASSES[i][0];o.text=CLASSES[i][1];sel.appendChild(o);}
+  var msel=document.getElementById("metal");
+  for(i=0;i<METALS.length;i++){o=document.createElement("option");o.value=METALS[i][0];o.text=METALS[i][1];msel.appendChild(o);}
+  function syncMetal(){document.getElementById("metalField").style.display=(sel.value.indexOf("metal_")===0)?"":"none";}
+  if(sel.addEventListener){sel.addEventListener("change",syncMetal,false);}else{sel.attachEvent("onchange",syncMetal);}
+  syncMetal();
 
   function byId(id){return document.getElementById(id);}
   function on(el,ev,fn){if(el.addEventListener){el.addEventListener(ev,fn,false);}else{el.attachEvent("on"+ev,fn);}}
@@ -158,7 +171,7 @@
     while(b&&b.parentNode!==g){b=b.parentNode;} if(!b)return;
     var c=g.childNodes,j;for(j=0;j<c.length;j++){if(c[j].className!==undefined)c[j].className="";}
     b.className="on";});}
-  segInit("res");segInit("eng");
+  segInit("res");segInit("eng");segInit("rnd");
   function segVal(id){var c=byId(id).childNodes,j;for(j=0;j<c.length;j++){
     if(c[j].className==="on")return c[j].getAttribute("data-v");}return"";}
 
@@ -183,10 +196,10 @@
   on(byId("browse"),"click",function(){cmd("browse");});
   on(byId("go"),"click",function(){
     var p={img:byId("img").value,name:byId("name").value,cls:sel.value,
-      res:segVal("res"),eng:segVal("eng"),assign:(asg.className==="toggle on"),
+      res:segVal("res"),eng:segVal("eng"),rnd:segVal("rnd"),metal:byId("metal").value,assign:(asg.className==="toggle on"),
       slate:(slt.className==="toggle on")};
     if(!p.img){window.mfStatus("err","Pick a reference image first.");return;}
-    window.mfStatus("busy","Generating "+p.res.toUpperCase()+" maps ("+p.eng+")...");
+    window.mfStatus("busy","Generating "+p.res.toUpperCase()+" maps ("+p.eng+", "+p.rnd+")...");
     cmd("create",p);});
 
   on(byId("saveKeys"),"click",function(){

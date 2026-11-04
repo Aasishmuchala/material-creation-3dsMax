@@ -8,7 +8,7 @@ It checks material parameters and texture pixels only — it never renders.
 
 | Part | State |
 |---|---|
-| Rule engine (17 rules) + pixel checks (8) | done, tested |
+| Rule engine (19 rules) + pixel checks (11) | done, tested |
 | HTML / JSON report | done, tested |
 | CLI for texture folders (works without Max) | done, tested |
 | Scene walker (VRayMtl, CoronaPhysicalMtl, CoronaLegacyMtl, Multi/Sub, nested texmaps) | done, tested against a fake MAXScript runtime |
@@ -43,13 +43,23 @@ names could not be checked against current V-Ray 7 / Corona docs from the build 
 | R015 | warning | VRayMtl BRDF is not GGX |
 | R016 | warning | Reflection glossiness exactly 1.0 on a non-glass material |
 | R017 | info | Legacy material type (Corona Legacy Mtl) |
+| R018 | warning | Metal named after a real metal (gold, copper, steel, alu, …) whose swatch is > 0.10 linear from that metal's measured F0 (fix: set the F0 from `matphys`) |
+| R020 | info | Looks AI-generated: M003 and M004 on one material (M010 / M013 join once calibrated on real scans, see docs/VERIFY.md row 12) |
 | M001/M002 | error / warning | Albedo map pixels darker / brighter than real surfaces |
-| M003 | warning | Roughness/gloss map is effectively one value |
+| M003 | warning | Roughness/gloss map is effectively one value (also: p01–p99 span < 0.04, i.e. noise on a constant) |
 | M004 | warning | Metalness map mostly grey |
 | M005 | error | Visible tiling seam (wrap-boundary z-score > 4) |
 | M006 | warning | Normal map doesn't match the height map |
 | M007 | error | Normal map convention (OpenGL / DirectX) differs from what the slot expects |
 | M008 | info | Detected normal-map convention |
+| M010 | warning | Albedo carries a smooth brightness gradient — baked lighting, shadow or vignette (quadratic fit to 16×16 sRGB-luminance box means: range / mean > 0.12, R² ≥ 0.5, local steps follow the fit ≥ 0.5; planks/tiles/bricks/marble pass) |
+| M012 | error | Height map polarity inverted relative to the normal map (corr_x < −0.3; fix: invert the height map) |
+| M013 | info | Data map (rough/gloss/normal/height ≥ 512 px) has a spectral cut-off at Nyquist/k (k = 3–8): power above it < 1 % of the band below — likely upscaled ≥ k×. Masks, bevels and smooth maps are skipped |
+
+Rules cover VRayMtl, CoronaPhysicalMtl and OpenPBR Material. Physical constants (metal F0 at
+650/550/450 nm, glass absorption, albedo limits) come from the shared `matphys/` package at
+the repo root — the same tables MatForge's builders use. `tools/build_bundle.py` copies it into
+the bundle next to `material_inspector`.
 
 All thresholds are in `core/rules.py: RuleConfig` and get calibrated in Phase 0.
 

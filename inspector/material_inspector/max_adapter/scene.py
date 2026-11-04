@@ -111,17 +111,27 @@ class SceneReader:
         else:
             if raw.get("metalness_mode") is not None:
                 p["metalness"] = 1.0 if int(raw["metalness_mode"]) == 1 else 0.0
+            elif raw.get("metalness") is not None and not isinstance(raw["metalness"], bool):
+                try:   # OpenPBR has no mode enum: the value itself is the metalness
+                    p["metalness"] = float(raw["metalness"])
+                except (TypeError, ValueError):
+                    pass
             if raw.get("refraction_amount") is not None:
                 p["refraction_amount"] = float(raw["refraction_amount"])
             if raw.get("absorption_color") is not None:
                 p["absorption_color"] = self._color(raw["absorption_color"])
         if raw.get("thin_walled") is not None:
             p["thin_walled"] = bool(raw["thin_walled"])
+        if raw.get("complex_ior") is not None:
+            p["complex_ior"] = bool(raw["complex_ior"])
         p["is_legacy"] = cls in P.LEGACY_CLASSES
 
         for role, names in P.SLOTS.get(cls, {}).items():
-            tex, _ = self._get(m, cls, f"slot:{role.value}", names)
+            tex, used = self._get(m, cls, f"slot:{role.value}", names)
             if tex is None:
+                continue
+            if used in P.NORMAL_INPUT_SLOTS.get(cls, ()):
+                rec.textures += self.read_texmap(tex, SlotRole.NORMAL, via_normal=True)
                 continue
             eff_role = role
             if cls == "VRayMtl" and role == SlotRole.GLOSSINESS and p.get("use_roughness"):

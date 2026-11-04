@@ -1,14 +1,16 @@
 """MatForge fal PATINA backend — reference image -> studio-grade PBR maps.
 
-This is the v4 AI map backend: fal-ai/patina/material does real de-light +
-deshadow + seamless tiling + upscale and returns basecolor/normal/roughness/
-metalness/height. It writes the SAME manifest contract as forge_cli.py (plus a
+This is the v4 AI map backend: fal-ai/patina/material/extract (default) pulls
+the surface out of a photo; fal-ai/patina/material (--mode generate) is the
+text(+image) generator. Both do de-light + deshadow + seamless tiling + upscale
+and return basecolor/normal/roughness/metalness/height. Schema facts live in
+docs/PATINA_ENDPOINT.md. It writes the SAME manifest contract as forge_cli.py (plus a
 metalness map), so the Max-side builder wiring is unchanged — exactly the
 swap-the-backend design the constitution's manifest contract was built for.
 
 Needs FAL_KEY in the environment. Usage:
   py -3.12 forge_fal.py <image> --name Oak --type wood_interior \
-      --prompt "natural light oak planks" --upscale 2 [--out DIR]
+      [--mode extract|generate] --prompt "natural light oak planks" --upscale 2 [--out DIR]
 """
 import argparse
 import json
@@ -19,7 +21,11 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.recipes import RECIPES  # noqa: E402
 
-# PATINA map_type -> MatForge manifest key
+ENDPOINTS = {"extract": "fal-ai/patina/material/extract",
+             "generate": "fal-ai/patina/material"}
+
+# PATINA map_type -> MatForge manifest key (both endpoints use these values;
+# the first output item has no map_type and is the flat texture, skipped)
 MAP_KEYS = {
     "basecolor": "albedo",
     "normal": "normal",
@@ -98,6 +104,16 @@ def fable_prompt(image_path, mclass, base_prompt):
     return base_prompt
 
 
+def _png_width(path):
+    """Output items may omit width/height (all optional in the schema)."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return im.size[0]
+    except Exception:
+        return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="MatForge fal PATINA backend")
     ap.add_argument("image")
@@ -108,6 +124,10 @@ def main(argv=None):
                     help="material description to guide PATINA")
     ap.add_argument("--no-fable", action="store_true",
                     help="skip the Fable-5 vision prompt; use the class template")
+    ap.add_argument("--mode", choices=sorted(ENDPOINTS), default="extract",
+                    help="extract=pull the surface from the photo "
+                    "(patina/material/extract); generate=text+image "
+                    "(patina/material)")
     ap.add_argument("--upscale", type=int, default=2, choices=[0, 2, 4],
                     help="0=native 1K, 2=2K, 4=4K")
     ap.add_argument("--out", default=None)
@@ -144,7 +164,7 @@ def main(argv=None):
         else:                              # Fable-5 looks at the photo
             prompt = fable_prompt(a.image, a.mclass, base_prompt)
         res = fal_client.subscribe(
-            "fal-ai/patina/material",
+            ENDPOINTS[a.mode],
             arguments={"image_url": url, "prompt": prompt,
                        "upscale_factor": a.upscale},
             with_logs=False)
@@ -158,12 +178,12 @@ def main(argv=None):
                 urllib.request.urlretrieve(im["url"], tmp)
                 os.replace(tmp, dest)
                 maps[MAP_KEYS[mt]] = os.path.abspath(dest)
-                res_px = im.get("width", res_px)
+                res_px = im.get("width") or res_px or _png_width(dest)
         if "albedo" not in maps:
             raise RuntimeError("PATINA returned no basecolor map")
 
         manifest = {"schema": 1, "name": a.name, "class": a.mclass,
-                    "res": f"{res_px}px", "maps": maps, "source": "fal-patina",
+                    "res": f"{res_px}px", "maps": maps, "source": "fal-patina-" + a.mode,
                     "input_prompt": prompt,
                     "patina_prompt": res.get("prompt", ""), "warnings": []}
         mp = os.path.join(out_dir, "manifest.json")

@@ -14,6 +14,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
+import matphys  # noqa: E402
 import mfconfig  # noqa: E402
 
 from core.recipes import class_choices  # noqa: E402
@@ -126,6 +127,15 @@ def diagnose(run_create=False):
         vray = False
     row(vray, "V-Ray (VRayMtl plugin loaded)",
         "" if vray else "set V-Ray as the active renderer")
+    try:
+        corona = bool(rt.execute("(CoronaPhysicalMtl != undefined)"))
+    except Exception:
+        corona = False
+    row(corona, "Corona (CoronaPhysicalMtl plugin loaded)",
+        "" if corona else "optional if V-Ray is present")
+    if not vray and not corona:
+        out.append("  [FAIL] neither renderer found   -- install/enable "
+                   "V-Ray or Corona")
 
     # 3. keys (both optional; Fast engine needs neither)
     st = {}
@@ -188,10 +198,11 @@ def _sanitize(name):
     return cleaned or "MatForge_Material"
 
 
-def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
+def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False,
+                renderer="auto", metal=None):
     """Shared core used by both the rollout and the web panel. Generates the
     full slate of maps (heuristic 'fast' or fal-PATINA 'ultra') and wires the
-    VRayMtl onto a Material Editor sphere. With slate=True, also opens the
+    V-Ray and/or Corona material onto a Material Editor sphere. With slate=True, also opens the
     Slate Material Editor showing the node wiring. Returns a result dict:
       {state: 'ok'|'err', text, material?, slot?, notes?}
     """
@@ -258,7 +269,8 @@ def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
 
     try:
         out = builder.build_from_manifest(result["manifest"], slot=None,
-                                          assign=assign, slate=slate)
+                                          assign=assign, slate=slate,
+                                          renderer=renderer, metal=metal)
     except Exception as e:
         return {"state": "err", "text": "Material wiring failed: %s" % e}
 
@@ -267,7 +279,7 @@ def _run_create(img, name, mclass, res, engine, seamless, assign, slate=False):
         notes.append(extra_note)
     misses = [l for l in out.get("log", []) if "MISS" in l]
     if misses:
-        notes.append("%d V-Ray propert%s could not be set" % (
+        notes.append("%d renderer propert%s could not be set (see listener)" % (
             len(misses), "y" if len(misses) == 1 else "ies"))
     if slate and not out.get("slate"):
         notes.append("Slate node view unavailable (needs an interactive Max "
@@ -298,7 +310,10 @@ def create_material():
         engine=["fast", "ultra"][ui.ddEngine.selection - 1],
         seamless=bool(ui.chkSeamless.checked),
         assign=bool(ui.chkAssign.checked),
-        slate=bool(ui.chkSlate.checked))
+        slate=bool(ui.chkSlate.checked),
+        renderer=["auto", "vray", "corona", "both"][ui.ddRenderer.selection - 1],
+        metal=(None if ui.ddMetal.selection <= 1 else
+               matphys.metal_choices()[ui.ddMetal.selection - 2][0]))
     ui.lblStatus.text = r["text"]
     if r["state"] == "err":
         rt.messageBox(r["text"], title="MatForge")
@@ -317,7 +332,9 @@ def create_from_panel(payload_json):
         r = _run_create(img=p.get("img", ""), name=p.get("name", ""),
                         mclass=p.get("cls", "generic"), res=p.get("res", "4k"),
                         engine=p.get("eng", "fast"), seamless=True,
-                        assign=bool(p.get("assign")), slate=bool(p.get("slate")))
+                        assign=bool(p.get("assign")), slate=bool(p.get("slate")),
+                        renderer=p.get("rnd", "auto"),
+                        metal=p.get("metal") or None)
     except Exception as e:
         r = {"state": "err", "text": "panel error: %s" % e}
     return json.dumps(r)
@@ -337,11 +354,11 @@ def browse_for_panel():
 
 def chat_reply(question):
     """Answer a user question via Fable-5 (omega). Used by the Help chat."""
-    system = ("You are the in-panel assistant for MatForge, a 3ds Max + V-Ray "
+    system = ("You are the in-panel assistant for MatForge, a 3ds Max + V-Ray or Corona "
               "material-creation plugin (reference image -> physically-correct "
-              "VRayMtl on a Material Editor sphere; Fast=heuristic maps, "
+              "VRayMtl or CoronaPhysicalMtl on a Material Editor sphere; Fast=heuristic maps, "
               "Ultra=fal PATINA AI + Fable-5 prompts). Help the user with "
-              "MatForge, V-Ray materials, and the archviz workflow. Be concise "
+              "MatForge, V-Ray or Corona materials, and the archviz workflow. Be concise "
               "and practical (a few sentences).")
     try:
         return mfconfig.omega_message(
@@ -371,7 +388,9 @@ def _bridge_create():
         r = _run_create(p.get("img", ""), p.get("name", ""),
                         p.get("cls", "generic"), p.get("res", "4k"),
                         p.get("eng", "fast"), True, bool(p.get("assign")),
-                        slate=bool(p.get("slate")))
+                        slate=bool(p.get("slate")),
+                        renderer=p.get("rnd", "auto"),
+                        metal=p.get("metal") or None)
     except Exception as e:
         r = {"state": "err", "text": "panel error: %s" % e}
     rt.mfBridgeState = r.get("state", "ok")
@@ -412,6 +431,8 @@ rollout MatForgeRollout "MatForge v1" width:340
     edittext edtName "Name:" fieldWidth:230
     dropdownlist ddClass "Material type:" items:#(%CLASS_ITEMS%)
     dropdownlist ddEngine "Engine:" items:#("Fast  (offline, no key)","Ultra  (fal PATINA AI)") selection:1
+    dropdownlist ddRenderer "Renderer:" items:#("Auto (active renderer)","V-Ray","Corona","Both") selection:1
+    dropdownlist ddMetal "Metal (for metal_ types):" items:#(%METAL_ITEMS%) selection:1
     checkbox chkSeamless "Make seamless (tileable)" checked:true
     checkbox chkAssign "Assign to selected objects" checked:false
     checkbox chkSlate "Open in Slate ME (show node wiring)" checked:false
@@ -433,7 +454,11 @@ def _mxs_str(s):
 
 def show():
     items = ",".join('"%s"' % _mxs_str(label) for _, label in _CLASSES)
-    ok = rt.execute(ROLLOUT_MXS.replace("%CLASS_ITEMS%", items))
+    metal_items = ",".join(
+        '"%s"' % _mxs_str(label)
+        for label in ["(from image)"] + [l for _, l in matphys.metal_choices()])
+    ok = rt.execute(ROLLOUT_MXS.replace("%CLASS_ITEMS%", items)
+                    .replace("%METAL_ITEMS%", metal_items))
     # rt.execute returns false (not an exception) on a MAXScript COMPILE error,
     # so the dialog would silently not appear. Surface it instead.
     if ok is False:

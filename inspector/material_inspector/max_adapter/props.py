@@ -25,6 +25,10 @@ MATERIAL_CLASSES = {
     "CoronaPhysicalMtl": Renderer.CORONA,
     "CoronaLegacyMtl": Renderer.CORONA,
     "CoronaMtl": Renderer.CORONA,          # old name of the legacy material
+    # OpenPBR class names are UNVERIFIED (3ds Max 2026/2027); see docs/VERIFY.md
+    "OpenPBRMaterial": Renderer.OPENPBR,
+    "OpenPBR_Material": Renderer.OPENPBR,
+    "OpenPBRSurfaceMaterial": Renderer.OPENPBR,
 }
 LEGACY_CLASSES = {"CoronaLegacyMtl", "CoronaMtl"}
 
@@ -52,6 +56,8 @@ PARAMS = {
         "absorption_color": ["volumetricAbsorptionColor", "absorptionColor"],
         "absorption_distance": ["volumetricAbsorptionDistance", "absorptionDistance"],
         "thin_walled": ["useThinMode", "thinMode"],
+        # same candidates MatForge's builder_corona writes (corona_props "complex_ior_on")
+        "complex_ior": ["useComplexIor", "complexIorEnabled", "metalComplexIor"],
     },
     "CoronaLegacyMtl": {
         "base_color": ["colorDiffuse"],
@@ -63,6 +69,18 @@ PARAMS = {
     },
 }
 PARAMS["CoronaMtl"] = PARAMS["CoronaLegacyMtl"]
+PARAMS["OpenPBRMaterial"] = {   # ALL UNVERIFIED
+    "base_color": ["base_color", "baseColor"],
+    "roughness": ["specular_roughness", "roughness"],
+    "metalness": ["base_metalness", "metalness", "metallic"],
+    "ior": ["specular_ior", "ior"],
+    "refraction_amount": ["transmission_weight", "transmission"],
+    "absorption_color": ["transmission_color"],
+    "absorption_distance": ["transmission_depth"],
+    "thin_walled": ["geometry_thin_walled", "thin_walled"],
+}
+PARAMS["OpenPBR_Material"] = PARAMS["OpenPBRMaterial"]
+PARAMS["OpenPBRSurfaceMaterial"] = PARAMS["OpenPBRMaterial"]
 
 #: VRayMtl brdf_type integer -> name (V-Ray docs: 0 Phong, 1 Blinn, 2 Ward, 3 GGX). UNVERIFIED
 VRAY_BRDF = {0: "phong", 1: "blinn", 2: "ward", 3: "ggx"}
@@ -105,6 +123,24 @@ SLOTS = {
     },
 }
 SLOTS["CoronaMtl"] = SLOTS["CoronaLegacyMtl"]
+SLOTS["OpenPBRMaterial"] = {   # ALL UNVERIFIED
+    SlotRole.BASE_COLOR: ["base_color_map"],
+    SlotRole.ROUGHNESS: ["specular_roughness_map", "roughness_map"],
+    SlotRole.METALNESS: ["base_metalness_map", "metalness_map"],
+    SlotRole.NORMAL: ["geometry_normal_map", "normal_map"],
+    SlotRole.BUMP: ["bump_map"],
+    SlotRole.DISPLACEMENT: ["displacement_map", "geometry_displacement_map"],
+    SlotRole.OPACITY: ["geometry_opacity_map", "opacity_map", "cutout_map"],
+    SlotRole.COAT: ["coat_weight_map"],
+    SlotRole.SHEEN: ["fuzz_weight_map"],
+    SlotRole.EMISSION: ["emission_color_map"],
+}
+SLOTS["OpenPBR_Material"] = SLOTS["OpenPBRMaterial"]
+SLOTS["OpenPBRSurfaceMaterial"] = SLOTS["OpenPBRMaterial"]
+
+#: Slots that ARE a normal-map input (no separate normal node needed). UNVERIFIED.
+NORMAL_INPUT_SLOTS = {c: ["geometry_normal_map", "normal_map"]
+                      for c in ("OpenPBRMaterial", "OpenPBR_Material", "OpenPBRSurfaceMaterial")}
 
 # ---------------------------------------------------------------- texmaps
 BITMAP_CLASSES = {

@@ -16,9 +16,16 @@ class InspectorOptions:
     max_side: int = 1024
     #: Expected tangent-space convention per renderer: 'opengl' / 'directx' / None.
     #: None until verified in Phase 0 (see docs/VERIFY.md) — detection is still reported.
-    normal_convention: dict = field(default_factory=lambda: {"vray": None, "corona": None})
+    normal_convention: dict = field(default_factory=lambda: {"vray": None, "corona": None, "openpbr": None})
     disabled_rules: tuple = ()
     config: RuleConfig = DEFAULT_CONFIG
+
+
+#: Data maps whose real resolution matters (M013). Metalness is a mask: sharp or flat by design.
+_UPSCALE_ROLES = (SlotRole.ROUGHNESS, SlotRole.GLOSSINESS, SlotRole.NORMAL, SlotRole.DISPLACEMENT)
+#: Pixel findings typical of image-generator output (R020 aggregates them).
+#: M010 / M013 stay out until calibrated on real scan sets (docs/VERIFY.md row 12).
+AI_SIGNATURES = ("M003", "M004")
 
 
 def _readable(path: Optional[str]) -> bool:
@@ -59,12 +66,19 @@ def pixel_findings(m: MaterialRecord, opt: InspectorOptions) -> list[Finding]:
                 mm = metal_mask if metal_mask is not None and metal_mask.shape == a.shape[:2] else None
                 out += mc.check_albedo(a, m.name, label, opt.config.albedo_floor_error,
                                        opt.config.albedo_floor_strict, opt.config.albedo_ceiling, mm)
+                out += mc.check_baked_lighting(a, m.name, label)
             out += mc.check_seam(a, m.name, label)
         elif t.role in (SlotRole.ROUGHNESS, SlotRole.GLOSSINESS):
             out += mc.check_constant(a, m.name, label, t.role.value)
             out += mc.check_seam(a, m.name, label)
         elif t.role in (SlotRole.NORMAL, SlotRole.BUMP, SlotRole.DISPLACEMENT):
             out += mc.check_seam(a, m.name, label)
+        if t.role in _UPSCALE_ROLES:
+            # resolution check needs native pixels, not the downsampled analysis copy
+            try:
+                out += mc.check_upscaled(mc.load_crop(t.path), m.name, label)
+            except Exception as exc:
+                out.append(Finding("M900", Severity.INFO, m.name, "Could not read image", repr(exc), None, label))
 
     normals = [t for t in m.textures if t.role in (SlotRole.NORMAL, SlotRole.BUMP)
                and _readable(t.path) and t.via_normal_node is not False]
@@ -73,17 +87,34 @@ def pixel_findings(m: MaterialRecord, opt: InspectorOptions) -> list[Finding]:
         n, h = get(normals[0].path), get(heights[0].path)
         if not isinstance(n, Exception) and not isinstance(h, Exception) and n.shape[-1] >= 3:
             expected = opt.normal_convention.get(m.renderer.value)
-            out += mc.check_normal_convention(n, h, m.name, os.path.basename(normals[0].path), expected)
+            out += mc.check_normal_convention(n, h, m.name, os.path.basename(normals[0].path), expected,
+                                              height_label=os.path.basename(heights[0].path))
     return out
+
+
+def ai_signature_finding(m: MaterialRecord, findings: Iterable[Finding]) -> Optional[Finding]:
+    """R020: two or more independent image-generator signatures on one material."""
+    ids = sorted({f.rule_id for f in findings if f.material == m.name} & set(AI_SIGNATURES))
+    if len(ids) < 2:
+        return None
+    return Finding("R020", Severity.INFO, m.name, "Looks AI-generated: " + ", ".join(ids),
+                   "Two or more generator signatures fired on this material's maps (flat maps, grey "
+                   "metalness). Each alone is common; together they "
+                   "usually mean the maps were generated from one image rather than measured.")
 
 
 def inspect(materials: Iterable[MaterialRecord], opt: InspectorOptions | None = None) -> list[Finding]:
     opt = opt or InspectorOptions()
     out: list[Finding] = []
     for m in materials:
-        out += inspect_material(m, opt.config, opt.disabled_rules)
+        mine = inspect_material(m, opt.config, opt.disabled_rules)
         if opt.check_pixels:
-            out += [f for f in pixel_findings(m, opt) if f.rule_id not in opt.disabled_rules]
+            mine += [f for f in pixel_findings(m, opt) if f.rule_id not in opt.disabled_rules]
+        if "R020" not in opt.disabled_rules:
+            agg = ai_signature_finding(m, mine)
+            if agg is not None:
+                mine.append(agg)
+        out += mine
     order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
     return sorted(out, key=lambda f: (order[f.severity], f.material, f.rule_id))
 

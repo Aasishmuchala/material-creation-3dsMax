@@ -18,8 +18,11 @@ EXAMPLE = {
     "disabled_rules": [],
     "check_pixels": True,
     "max_side": 1024,
-    "normal_convention": {"vray": None, "corona": None},
-    "rules": {"albedo_floor_error": 30.0, "albedo_floor_strict": 50.0, "albedo_ceiling": 240.0},
+    "normal_convention": {"vray": None, "corona": None, "openpbr": None},
+    # Defaults flow from RuleConfig (i.e. matphys); no second copy of the numbers here.
+    "rules": {"albedo_floor_error": RuleConfig.albedo_floor_error,
+              "albedo_floor_strict": RuleConfig.albedo_floor_strict,
+              "albedo_ceiling": RuleConfig.albedo_ceiling},
 }
 
 
@@ -52,7 +55,7 @@ def load_options(path: Optional[str] = None) -> tuple[InspectorOptions, list[str
         overrides[k] = tuple(v) if isinstance(v, list) else v
     known = {"disabled_rules", "check_pixels", "max_side", "normal_convention", "rules"}
     warnings += [f"Unknown setting '{k}' ignored" for k in data if k not in known]
-    nc = {"vray": None, "corona": None, **(data.get("normal_convention") or {})}
+    nc = {"vray": None, "corona": None, "openpbr": None, **(data.get("normal_convention") or {})}
     for r, v in nc.items():
         if v not in (None, "opengl", "directx"):
             warnings.append(f"normal_convention.{r} must be opengl, directx or null"); nc[r] = None

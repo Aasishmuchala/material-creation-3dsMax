@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from .recipes import RESOLUTIONS, get_recipe
+import matphys  # noqa: E402  (repo root put on sys.path by .recipes)
 
 # Finite cap (not None): allow generous inputs but refuse decompression bombs.
 # 24576² ~= 600 MP covers any realistic reference; beyond that the native-res
@@ -121,6 +122,40 @@ def derive_albedo(rgb):
     return np.clip(rgb * gain, 0.0, 1.0)
 
 
+def _srgb_to_lin(a):
+    return np.where(a <= 0.04045, a / 12.92,
+                    ((a + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _lin_to_srgb(a):
+    a = np.clip(a, 0.0, 1.0)
+    return np.where(a <= 0.0031308, a * 12.92,
+                    1.055 * np.power(a, 1.0 / 2.4) - 0.055).astype(np.float32)
+
+
+def clamp_albedo(rgb, floor_8bit=matphys.ALBEDO_FLOOR_ERROR,
+                 ceiling_8bit=matphys.ALBEDO_CEILING):
+    """Pull per-pixel albedo luminance into [floor, ceiling] (8-bit sRGB
+    luminance), scaling in linear so hue is preserved.
+
+    Returns (rgb, fraction_of_pixels_changed).
+    """
+    lin = _srgb_to_lin(np.clip(rgb.astype(np.float32), 0.0, 1.0))
+    y = (lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152
+         + lin[..., 2] * 0.0722)
+    lo = float(_srgb_to_lin(np.float32(floor_8bit / 255.0)))
+    hi = float(_srgb_to_lin(np.float32(ceiling_8bit / 255.0)))
+    target = np.clip(y, lo, hi)
+    changed = target != y
+    scale = np.where(changed, target / np.maximum(y, 1e-6), 1.0)
+    # pure black has no hue to keep: lift it to a neutral grey at the floor
+    black = changed & (y <= 1e-6)
+    out = lin * scale[..., None]
+    out = np.where(black[..., None], target[..., None], out)
+    out = _lin_to_srgb(out)
+    return np.clip(out, 0.0, 1.0), float(changed.mean())
+
+
 def derive_height(rgb):
     lum = _luminance(rgb)
     # remove global shading trend so height is local relief, not lighting
@@ -176,7 +211,8 @@ def derive_opacity(img):
 
 
 def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
-                  seamless=True, warnings=None):
+                  seamless=True, warnings=None, name="",
+                  clamp_albedo_range=True):
     """Derive the full PBR set. Returns {map_name: absolute_path}.
 
     If `warnings` is a list, non-fatal advisories (e.g. foliage with no alpha)
@@ -192,6 +228,16 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
     rgb = _to_float(rgb_img)
 
     albedo = derive_albedo(rgb)
+    # Emissive / refractive albedos carry intent (glow, tint), so never clamp.
+    if (clamp_albedo_range and recipe["metalness"] < 0.5
+            and not recipe.get("self_illum") and not recipe.get("refraction")
+            and not matphys.is_whitelisted(name)):
+        albedo, frac = clamp_albedo(albedo)
+        if frac > 0.01:
+            msg = ("albedo clamp: %.1f%% of pixels moved into the 30\u2013240 "
+                   "sRGB range" % (frac * 100.0))
+            if warnings is not None:
+                warnings.append(msg)
     height = derive_height(rgb)
     # Measure roughness variation from the DE-LIT albedo, not the raw photo:
     # raw specular highlights (the smoothest spots) would otherwise push

@@ -23,6 +23,7 @@ if _REPO not in sys.path:
 
 import contextlib  # noqa: E402
 
+import matphys  # noqa: E402
 from core.recipes import RECIPES, get_recipe  # noqa: E402
 
 import pymxs  # noqa: E402
@@ -81,6 +82,34 @@ def _color(rgb):
     return rt.Color(rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0)
 
 
+def _swatch(rgb_linear):
+    """Linear RGB -> swatch colour, written as-is.
+
+    3ds Max stores colour parameters scene-linear; gamma "Affect Color
+    Selectors" / OCIO only changes how the picker displays them. So F0, edge
+    tint, fog and absorption are all written linear (never display-encoded).
+    """
+    return _color(tuple(rgb_linear))
+
+
+def _has_class(name):
+    """True when a MAXScript class exists. hasattr() is useless on pymxs
+    (missing names come back as an `undefined` wrapper), so ask MAXScript."""
+    try:
+        return bool(rt.execute("(%s != undefined)" % name))
+    except Exception:
+        return False
+
+
+def _mm_per_scene_unit():
+    """Millimetres in one scene system unit (inverse of _mm_to_scene_units)."""
+    try:
+        per_mm = _mm_to_scene_units(1.0)
+        return 1.0 / per_mm if per_mm > 0 else 1.0
+    except Exception:
+        return 1.0
+
+
 def _bitmap_tex(path, linear=False):
     """Load a map into a Bitmaptexture with deterministic color management.
 
@@ -106,9 +135,19 @@ def _bitmap_tex(path, linear=False):
     return tex
 
 
-def build_material(maps, name, mclass):
-    """maps: dict map_name -> file path. Returns the top-level material."""
+def build_material(maps, name, mclass, metal=None):
+    """maps: dict map_name -> file path. Returns the top-level material.
+
+    metal: optional matphys.METALS key; defaults to the recipe's named metal.
+    """
     recipe = get_recipe(mclass)
+    metal = metal or recipe.get("metal")
+    if metal and metal not in matphys.METALS:
+        raise ValueError("unknown metal '%s' (known: %s)"
+                         % (metal, ", ".join(matphys.METALS)))
+    # F0 mode: named metal + scalar full metalness (no metalness map)
+    f0_mode = bool(metal and "metalness" not in maps
+                   and recipe.get("metalness", 0) >= 1.0)
     LOG.clear()
     _log(f"building '{name}' as {mclass}")
 
@@ -118,10 +157,22 @@ def build_material(maps, name, mclass):
     # --- diffuse ---
     if "albedo" in maps:
         mat.texmap_diffuse = _bitmap_tex(maps["albedo"], linear=False)
+    if f0_mode:
+        # measured F0 as the swatch; albedo map kept at 30 % so scratches /
+        # patina survive without re-tinting
+        _set_first(mat, ["diffuse"], _swatch(matphys.metal_f0(metal)),
+                   "metal F0 base colour")
+        if "albedo" in maps:
+            _set_first(mat, ["texmap_diffuse_multiplier"], 30.0,
+                       "metal albedo blend 30%")
 
     # --- reflection: Fresnel on, roughness-mode, map plugged directly ---
-    _set_first(mat, ["reflection"], _color(recipe["reflect_color"]),
-               "reflect color")
+    if f0_mode:
+        _set_first(mat, ["reflection"],
+                   _swatch(matphys.metal_edge_tint(metal)), "metal edge tint")
+    else:
+        _set_first(mat, ["reflection"], _color(recipe["reflect_color"]),
+                   "reflect color")
     _set_first(mat, ["reflection_fresnel", "brdf_fresnel"], True, "fresnel")
     _set_first(mat, ["brdf_useRoughness", "useRoughness"], True,
                "roughness mode")
@@ -162,13 +213,22 @@ def build_material(maps, name, mclass):
     if refr:
         _set_first(mat, ["refraction"], _color((1.0, 1.0, 1.0)),
                    "refract color")
-        _set_first(mat, ["refraction_ior", "refractionIOR"], refr["ior"],
+        fog_color, fog_mult, r_ior = (refr["fog_color"], refr["fog_mult"],
+                                      refr["ior"])
+        if refr.get("glass"):
+            # measured glass: IOR + absorption from matphys (one source)
+            g = refr["glass"]
+            r_ior = matphys.glass_ior(g)
+            fog_color, fog_mult = matphys.to_vray_fog(
+                matphys.glass_sigma_mm(g), refr["thickness_mm"],
+                _mm_per_scene_unit())
+        _set_first(mat, ["refraction_ior", "refractionIOR"], r_ior,
                    "refraction IOR")
         _set_first(mat, ["refraction_fogColor", "refraction_fog_color",
-                         "fogColor"], _color(refr["fog_color"]), "fog color")
+                         "fogColor"], _color(fog_color), "fog color")
         _set_first(mat, ["refraction_fogMult", "refraction_fogMultiplier",
                          "refraction_fog_mult", "fogMult"],
-                   refr["fog_mult"], "fog multiplier")
+                   fog_mult, "fog multiplier")
         _set_first(mat, ["refraction_affectShadows",
                          "refraction_affect_shadows", "affectShadows"],
                    refr.get("affect_shadows", True), "affect shadows")
@@ -408,6 +468,9 @@ def _validate_manifest(mf):
     if mf["class"] not in RECIPES:
         raise ValueError(f"manifest class '{mf['class']}' is not a known "
                          f"MatForge material class")
+    if mf.get("metal") and mf["metal"] not in matphys.METALS:
+        raise ValueError(f"manifest metal '{mf['metal']}' is not a known "
+                         f"metal")
     missing = [f"{k}={p}" for k, p in mf["maps"].items()
                if not os.path.isfile(p)]
     if missing:
@@ -415,19 +478,101 @@ def _validate_manifest(mf):
                                 + ", ".join(missing))
 
 
-def build_from_manifest(manifest_path, slot=None, assign=False, slate=False):
+def detect_renderer():
+    """'vray' | 'corona' | None from the active renderer's class name."""
+    try:
+        cls = str(rt.classOf(rt.renderers.current)).lower()
+    except Exception:
+        return None
+    if "v_ray" in cls or "vray" in cls:
+        return "vray"
+    if "corona" in cls:
+        return "corona"
+    return None
+
+
+def resolve_renderer(choice="auto"):
+    """Resolve auto|vray|corona|both to 'vray'|'corona'|'both' or raise."""
+    if choice not in ("auto", "vray", "corona", "both"):
+        raise ValueError("renderer must be auto|vray|corona|both")
+    has_v = _has_class("VRayMtl")
+    has_c = _has_class("CoronaPhysicalMtl")
+    if choice == "auto":
+        det = detect_renderer()
+        if det == "vray" and has_v:
+            return "vray"
+        if det == "corona" and has_c:
+            return "corona"
+        if has_v:
+            return "vray"
+        if has_c:
+            return "corona"
+        raise RuntimeError("Neither V-Ray nor Corona material classes are "
+                           "available")
+    if choice in ("vray", "both") and not has_v:
+        raise RuntimeError("V-Ray is not available in this session")
+    if choice in ("corona", "both") and not has_c:
+        raise RuntimeError("Corona is not available in this session")
+    return choice
+
+
+def build_from_manifest(manifest_path, slot=None, assign=False, slate=False,
+                        renderer="auto", metal=None, corona_bitmap=False):
     with open(manifest_path, "r", encoding="utf-8") as f:
         mf = json.load(f)
     _validate_manifest(mf)
+    resolved = resolve_renderer(renderer)
+    metal = metal or mf.get("metal")
+    want_v = resolved in ("vray", "both")
+    want_c = resolved in ("corona", "both")
+    bc = None
+    if want_c:
+        from maxplugin import builder_corona as bc   # lazy: it imports builder
+    built = []          # [{"renderer","material","slot"}] + live mats
+    mats = {}
+    vlog = []
     # one undo transaction: create + place + assign revert as a single Ctrl-Z
     with _undo_ctx("MatForge Create"):
-        mat = build_material(mf["maps"], mf["name"], mf["class"])
-        used_slot = put_in_editor(mat, slot)
+        if want_v:
+            mats["vray"] = build_material(mf["maps"], mf["name"], mf["class"],
+                                          metal=metal)
+            vlog = list(LOG)
+            s = put_in_editor(mats["vray"], slot)
+            built.append({"renderer": "vray",
+                          "material": mats["vray"].name, "slot": s})
+        if want_c:
+            mats["corona"] = bc.build_material(
+                mf["maps"], mf["name"], mf["class"], metal=metal,
+                use_corona_bitmap=corona_bitmap)
+            # builder_corona clears the shared LOG; keep the V-Ray lines first
+            LOG[:] = vlog + list(LOG)
+            cslot = slot
+            if want_v:
+                # next to the V-Ray sphere; one back when V-Ray took the last
+                # slot (put_in_editor would clamp +1 onto the same slot)
+                vslot = built[0]["slot"]
+                n = int(rt.meditMaterials.count)
+                cslot = vslot - 1 if vslot >= n else vslot + 1
+            s = put_in_editor(mats["corona"], cslot)
+            built.append({"renderer": "corona",
+                          "material": mats["corona"].name, "slot": s})
         if assign:
-            assign_to_selection(mat, mf["class"],
-                                height_map=mf["maps"].get("height"))
+            target = "vray"
+            if resolved == "corona":
+                target = "corona"
+            elif resolved == "both" and detect_renderer() == "corona":
+                target = "corona"
+            height = mf["maps"].get("height")
+            if target == "corona":
+                bc.assign_to_selection(mats["corona"], mf["class"],
+                                       height_map=height)
+            else:
+                assign_to_selection(mats["vray"], mf["class"],
+                                    height_map=height)
+    primary = built[0]
     # Slate view is opened OUTSIDE the undo block (opening an editor / laying
     # out nodes isn't part of the material-create undo transaction).
-    slated = show_in_slate(mat) if slate else False
-    return {"material": mat.name, "slot": used_slot, "log": list(LOG),
-            "slate": slated}
+    slated = show_in_slate(mats[primary["renderer"]]) if slate else False
+    return {"material": primary["material"], "slot": primary["slot"],
+            "log": list(LOG), "slate": slated, "renderer": resolved,
+            "materials": built}
