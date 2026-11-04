@@ -8,14 +8,14 @@ It checks material parameters and texture pixels only — it never renders.
 
 | Part | State |
 |---|---|
-| Rule engine (19 rules) + pixel checks (11) | done, tested |
+| Rule engine (18 rule IDs, R001–R020) + pixel checks (12, M013 experimental and off by default) | done, tested |
 | HTML / JSON report | done, tested |
 | CLI for texture folders (works without Max) | done, tested |
 | Scene walker (VRayMtl, CoronaPhysicalMtl, CoronaLegacyMtl, Multi/Sub, nested texmaps) | done, tested against a fake MAXScript runtime |
 | One-click fixes with undo | colour space, parameters, roughness toggle, invert map, glass absorption, normal node — tested on the fake runtime |
 | Settings file (thresholds, disabled rules, normal convention) | done, tested |
 | Crash log (`%LOCALAPPDATA%\MeasuredLight\logs`) | done, tested |
-| Dockable PySide6 panel | tested headless against the fake runtime |
+| Dockable PySide6/PySide2 dock | tested headless against the fake runtime |
 | Self-test for the first Windows run (`tools/max_selftest.py`) | done; executed end-to-end against a fake `pymxs` |
 | Property-table checker (`devtools/props_check`) | done, tested |
 | Batch scanner + false-positive tooling (`tools/batch_scan.py`, `devtools/fp_rate`) | done; fp_rate tested, batch_scan untested (needs Max) |
@@ -32,9 +32,11 @@ names could not be checked against current V-Ray 7 / Corona docs from the build 
 | R001 | error | Data map (roughness, gloss, metal, normal, bump, height, opacity) loaded as sRGB |
 | R002 | warning | 8/16-bit colour map loaded as linear |
 | R003 | info | Colour space unreadable — reported, never guessed |
-| R004 | error | Texture file missing |
+| R004 | error | Texture file missing, or the path is a folder, a broken/looping link or unreadable |
 | R005 | error | Gloss map in a roughness slot or vice versa (from the file name) |
 | R006 | error | Normal map plugged straight into bump without a normal-map node |
+| R007 | info | Texture graph deeper than `MAX_TEXMAP_DEPTH` (8) — deeper maps were not inspected |
+| R008 | info | Parameter is NaN / ±infinity — no rule can judge it (other rules skip it) |
 | R010 | error / warning | Base colour luminance < 30 / < 50 / > 240 sRGB (snow, reference whites exempt) |
 | R011 | warning | Metal darker than any real metal (linear luminance < 0.40) |
 | R012 | warning | Constant metalness between 0.05 and 0.95 |
@@ -48,13 +50,15 @@ names could not be checked against current V-Ray 7 / Corona docs from the build 
 | M001/M002 | error / warning | Albedo map pixels darker / brighter than real surfaces |
 | M003 | warning | Roughness/gloss map is effectively one value (also: p01–p99 span < 0.04, i.e. noise on a constant) |
 | M004 | warning | Metalness map mostly grey |
-| M005 | error | Visible tiling seam (wrap-boundary z-score > 4) |
+| M005 | error | Visible tiling seam, measured at native resolution: robust z of the wrap step (median / MAD of the interior adjacent-row/column steps) minus 1.5 × the robust z of the largest interior step > 4 — plank edges and grout lines on the border recur inside the tile and stay quiet (`RuleConfig.seam_z_max`, `seam_tail_ratio`) |
 | M006 | warning | Normal map doesn't match the height map |
 | M007 | error | Normal map convention (OpenGL / DirectX) differs from what the slot expects |
 | M008 | info | Detected normal-map convention |
+| M009 | info | Once per scan: M007 is inactive because `normal_convention` is unset for a renderer whose materials carry normal maps (see `docs/FIRST_WINDOWS_SESSION.md` step 4) |
 | M010 | warning | Albedo carries a smooth brightness gradient — baked lighting, shadow or vignette (quadratic fit to 16×16 sRGB-luminance box means: range / mean > 0.12, R² ≥ 0.5, local steps follow the fit ≥ 0.5; planks/tiles/bricks/marble pass) |
 | M012 | error | Height map polarity inverted relative to the normal map (corr_x < −0.3; fix: invert the height map) |
-| M013 | info | Data map (rough/gloss/normal/height ≥ 512 px) has a spectral cut-off at Nyquist/k (k = 3–8): power above it < 1 % of the band below — likely upscaled ≥ k×. Masks, bevels and smooth maps are skipped |
+| M013 | info | **Experimental, off by default** (`RuleConfig.experimental_off`; enable with `"rules": {"experimental_off": []}`) until calibrated on real scans (docs/VERIFY.md row 12). Data map (rough/gloss/normal/height ≥ 512 px) has a spectral cut-off at Nyquist/k (k = 3–8): power above it < 1 % of the band below — likely upscaled ≥ k×. Masks, bevels and smooth maps are skipped |
+| M900 | info | Map could not be read, is too small (< 8 px) for a check, or a check failed on it — one bad map never stops the scan |
 
 Rules cover VRayMtl, CoronaPhysicalMtl and OpenPBR Material. Physical constants (metal F0 at
 650/550/450 nm, glass absorption, albedo limits) come from the shared `matphys/` package at
@@ -75,6 +79,13 @@ cd material-inspector && python3 -m pytest -q
 python3 -m material_inspector.cli check-folder path/to/textures --report report.html --normal-convention opengl
 ```
 
+Exit codes: `0` clean, `1` errors found, `2` could not check (folder missing, not a folder,
+unreadable, or no texture sets in it — the reason is printed on stderr).
+
+Settings (`inspector.json`) are type-checked key by key: a wrong type, a NaN or negative
+threshold, an unknown rule ID or a `max_side` outside 16–65536 gives a warning and that key
+keeps its default. The dock shows the warning count on its first screen.
+
 ## Install in 3ds Max
 
 ```powershell
@@ -82,7 +93,13 @@ powershell -ExecutionPolicy Bypass -File tools\install.ps1
 ```
 
 Restart 3ds Max, then add **Measured Light › Material Inspector** to a toolbar (Customize User Interface).
-Settings: the panel's **Settings…** button opens `%APPDATA%\MeasuredLight\inspector.json`.
+The dock has two steps: press **Check my scene**, then **Fix all N** (each fix can be undone with Ctrl+Z).
+Findings are grouped as **Will render wrong**, **Worth a look** and **Notes**; each row has a
+**Fix** button (or **Manual** when it needs a hand fix) and **Why?** for the detail and rule id.
+**Export report** is on every screen. The **Settings** sheet shows `%APPDATA%\MeasuredLight\inspector.json`
+and has **Open settings file** and **Reload**. The dock uses the shared `forgeui/` kit, which the bundle copies in.
+
+![Material Inspector idle screen](docs/ui/screens/inspector_idle_400.png)
 
 ## Layout
 

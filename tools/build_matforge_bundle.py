@@ -21,7 +21,7 @@ BUNDLE_NAME = "MatForge.bundle"
 
 # runtime python packages and files that the Max-side plugin and its system-Python
 # map generators import (forge_cli.py / forge_fal.py are shelled out to)
-PACKAGES = ["core", "maxplugin", "matphys", "ui"]
+PACKAGES = ["core", "maxplugin", "matphys", "forgeui"]
 FILES = [
     "forge_cli.py",
     "forge_fal.py",
@@ -30,7 +30,6 @@ FILES = [
     "requirements.txt",
     "install_matforge.ms",
     "matforge_macros.ms",
-    "matforge_panel.ms",
     "matforge_diagnose.ms",
 ]
 

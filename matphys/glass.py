@@ -71,6 +71,14 @@ def glass_sigma_mm(key):
     return tuple(-math.log(min(max(t, _T_MIN), 1.0)) / d for t in g["transmittance"])
 
 
+def sigma_from_transmittance(transmittance_rgb, thickness_mm):
+    """Absorption per mm from a transmittance colour T at thickness_mm
+    (recipes without a named glass, e.g. gemstone): -ln(T) / d."""
+    d = float(thickness_mm)
+    return tuple(-math.log(min(max(float(t), _T_MIN), 1.0)) / d
+                 for t in transmittance_rgb)
+
+
 def transmittance(sigma_mm, thickness_mm):
     """Beer-Lambert transmittance exp(-sigma d) per channel."""
     return tuple(math.exp(-s * thickness_mm) for s in sigma_mm)

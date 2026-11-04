@@ -25,3 +25,6 @@ inspector/dist/
 
 # MatForge bundle build output
 dist/
+
+# local Qt dev env for offscreen UI screenshots (not part of the product)
+.venv-qt/

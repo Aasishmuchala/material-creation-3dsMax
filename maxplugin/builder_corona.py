@@ -116,9 +116,9 @@ def _wire_metal(mat, maps, recipe, metal, tex):
     # F0 mode (Decision 5): measured n,k, never guessed from pixels
     nk = matphys.metal_nk(metal)
     if _set(mat, "complex_ior_on", True, "complex IOR toggle"):
-        _set(mat, "complex_ior_n", _vb._color([c[0] for c in nk]),
+        _set(mat, "complex_ior_n", _vb._color_raw([c[0] for c in nk]),
              "complex IOR n")
-        _set(mat, "complex_ior_k", _vb._color([c[1] for c in nk]),
+        _set(mat, "complex_ior_k", _vb._color_raw([c[1] for c in nk]),
              "complex IOR k")
     else:
         _vb._log("  complex IOR unavailable; base = F0, edge = Gulbrandsen g")
@@ -182,13 +182,14 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
         thickness = float(refr.get("thickness_mm") or 10.0)
         mm_per_unit = _mm_per_scene_unit()
         if glass:
-            colour, dist = matphys.to_corona_absorption(
-                matphys.glass_sigma_mm(glass), thickness, mm_per_unit)
+            sigma = matphys.glass_sigma_mm(glass)
         else:
-            # no named glass: the recipe fog colour is the transmittance of
-            # one thickness_mm pane (same as the V-Ray path keeps it)
-            colour = tuple(refr["fog_color"])
-            dist = thickness / mm_per_unit
+            # no named glass (gemstone): the recipe fog colour is the
+            # transmittance of one thickness_mm pane (same as V-Ray)
+            sigma = matphys.sigma_from_transmittance(refr["fog_color"],
+                                                     thickness)
+        colour, dist = matphys.to_corona_absorption(sigma, thickness,
+                                                    mm_per_unit)
         _set(mat, "absorption_color", _vb._color(colour), "absorption colour")
         _set(mat, "absorption_distance", dist,
              "absorption distance (scene units)")

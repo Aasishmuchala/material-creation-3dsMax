@@ -6,6 +6,9 @@ Files are grouped into materials by their name stem (text before the map-type
 token, e.g. ``Wood049_2K_Roughness.png`` -> ``Wood049_2K``) and assigned roles
 from the map-type token. Colour space is assumed from the role (colour maps sRGB,
 data maps linear), which is how a correct import would load them.
+
+Exit codes: 0 clean, 1 errors found, 2 could not check (bad folder argument or no
+texture sets found; the reason goes to stderr).
 """
 from __future__ import annotations
 
@@ -77,6 +80,16 @@ def main(argv=None) -> int:
     cf.add_argument("--show-info", action="store_true")
     a = ap.parse_args(argv)
 
+    # exit 2 = could not check (bad argument / nothing found); 1 = errors found; 0 = clean
+    if not os.path.exists(a.folder):
+        print(f"error: folder does not exist: {a.folder}", file=sys.stderr)
+        return 2
+    if not os.path.isdir(a.folder):
+        print(f"error: not a folder: {a.folder}", file=sys.stderr)
+        return 2
+    if not os.access(a.folder, os.R_OK | os.X_OK):
+        print(f"error: cannot read folder (permission denied): {a.folder}", file=sys.stderr)
+        return 2
     mats = materials_from_folder(a.folder)
     if not mats:
         print("No texture sets found.", file=sys.stderr)

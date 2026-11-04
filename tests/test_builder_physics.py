@@ -97,12 +97,17 @@ def test_water_fog():
     assert p["refraction_fogMult"] == pytest.approx(0.001, abs=1e-5)
 
 
-def test_gemstone_keeps_recipe_fog():
+def test_gemstone_fog_through_matphys():
+    """Recipe fog_color = T at thickness_mm (10 mm); mult = mm_per_unit / d
+    like every glass (supersedes the old raw recipe fog_mult)."""
     b, rt = mock_pymxs.install()
     mat = b.build_material(MAPS, "S", "gemstone")
     p = mat.props
     assert _close(p["refraction_fogColor"].as_unit(), (0.97, 0.99, 1.0), 0.003)
-    assert p["refraction_fogMult"] == 0.06
+    assert p["refraction_fogMult"] == pytest.approx(1 / 10.0, abs=1e-9)
+    b, rt = mock_pymxs.install(system_unit="m")
+    p = b.build_material(MAPS, "S", "gemstone").props
+    assert p["refraction_fogMult"] == pytest.approx(1000 / 10.0, abs=1e-6)
 
 
 def test_manifest_unknown_metal(tmp_path):

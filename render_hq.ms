@@ -1,3 +1,4 @@
 _root = trimRight (getFilenamePath (getThisScriptFilename())) "\\"
-python.Execute ("import os; os.environ['MATFORGE_ROOT']=r'" + _root + "'")
+global MatForgeRoot = _root   -- read by Python via pymxs, never spliced into a literal
+python.Execute "import os; from pymxs import runtime as _rt; os.environ['MATFORGE_ROOT']=str(_rt.MatForgeRoot)"
 python.ExecuteFile (_root + "\\RENDER_HQ.py")

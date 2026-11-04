@@ -261,7 +261,9 @@ RECIPES = {
     },
     "metal_rust": {
         "label": "Metal (rusted / corten steel)",
-        "ior": 1.5, "metalness": 0.25,
+        # rust/oxide is dielectric; metalness is bimodal (spec 2b) -- a
+        # metalness MAP carries any exposed bare metal
+        "ior": 1.5, "metalness": 0.0,
         "base_roughness": 0.65, "roughness_variation": 0.25,
         "bump_amount": 40.0, "displacement_mm": 0.5,
         "refraction": None, "two_sided": False, "opacity": False,
@@ -270,7 +272,9 @@ RECIPES = {
     },
     "car_paint": {
         "label": "Car paint (metallic + clearcoat)",
-        "ior": 1.5, "metalness": 0.85,
+        # paint binder is dielectric (metalness bimodal, spec 2b); the
+        # clearcoat carries the look, flakes are not modelled as metal
+        "ior": 1.5, "metalness": 0.0,
         "base_roughness": 0.30, "roughness_variation": 0.05,
         "bump_amount": 3.0, "displacement_mm": 0.0,
         "refraction": None, "two_sided": False, "opacity": False,
@@ -425,3 +429,27 @@ def get_recipe(mclass):
 def class_choices():
     """(key, label) pairs in stable order for UI dropdowns."""
     return [(k, v["label"]) for k, v in RECIPES.items()]
+
+
+CLASS_GROUPS = [
+    ("Wood", ["wood_interior", "wood_exterior", "cork"]),
+    ("Stone", ["concrete", "concrete_polished", "stone", "marble", "granite",
+               "terracotta", "ceramic_glazed", "asphalt", "sand"]),
+    ("Metal", ["metal_brushed", "metal_painted", "metal_chrome", "metal_satin",
+               "metal_rust", "car_paint"]),
+    ("Glass", ["glass_clear", "glass_frosted", "gemstone", "water"]),
+    ("Fabric", ["fabric", "leather", "velvet", "carpet", "paper"]),
+    ("Plastic", ["plastic_glossy", "plastic_matte", "rubber"]),
+    ("Other", ["paint_wall", "foliage", "wax", "emissive", "generic"]),
+]
+
+
+def grouped_class_choices():
+    """[(group, [(key, label), ...]), ...] for the dock's class tiles."""
+    return [(group, [(k, RECIPES[k]["label"]) for k in keys])
+            for group, keys in CLASS_GROUPS]
+
+
+def wants_metal_picker(key):
+    """True when the class is a metal, so the UI shows the metal picker."""
+    return key.startswith("metal_")

@@ -14,6 +14,35 @@ from .model import Finding, FixAction, Severity
 
 # ---------------------------------------------------------------- loading
 
+def _to_float(im) -> np.ndarray:
+    """PIL image -> float32 H×W×C in [0, 1], values as stored (no colour conversion).
+
+    8-bit modes divide by 255, 16-bit by 65535. 32-bit float (``F``) and 32-bit
+    integer (``I``) single-channel maps are scaled by their own range when it
+    falls outside [0, 1] (heights in scene units): ``convert("RGB")`` would clip
+    them to black and white.
+    """
+    if im.mode == "F":
+        a = np.asarray(im, dtype=np.float32).copy()
+        ok = np.isfinite(a)
+        a[~ok] = 0.0
+        if ok.any():
+            lo, hi = float(a[ok].min()), float(a[ok].max())
+            if lo < 0.0 or hi > 1.0:
+                a = (a - lo) / (hi - lo) if hi > lo else np.zeros_like(a)
+    elif im.mode in ("I;16", "I;16B", "I;16L", "I"):
+        a = np.asarray(im).astype(np.float32)
+        hi = float(a.max()) if a.size else 0.0
+        a = a / (65535.0 if im.mode != "I" or 0.0 <= hi <= 65535.0 else hi)
+    else:
+        if im.mode not in ("L", "RGB", "RGBA"):
+            im = im.convert("RGB")
+        a = np.asarray(im).astype(np.float32) / 255.0
+    if a.ndim == 2:
+        a = a[..., None]
+    return np.clip(a, 0.0, 1.0)
+
+
 def load_map(path: str, max_side: int = 1024) -> np.ndarray:
     """Load an image as float32 in [0, 1], H×W×C, downsampled for speed.
 
@@ -24,13 +53,37 @@ def load_map(path: str, max_side: int = 1024) -> np.ndarray:
     im = Image.open(path)
     if max(im.size) > max_side:
         im.thumbnail((max_side, max_side), Image.BILINEAR)
-    mode_max = 65535.0 if im.mode in ("I;16", "I;16B", "I") else 255.0
-    if im.mode not in ("L", "RGB", "RGBA", "I;16", "I;16B", "I"):
-        im = im.convert("RGB"); mode_max = 255.0
-    a = np.asarray(im).astype(np.float32) / mode_max
-    if a.ndim == 2:
-        a = a[..., None]
-    return np.clip(a, 0.0, 1.0)
+    return _to_float(im)
+
+
+def load_map_and_seam(path: str, max_side: int = 1024, **seam_kw) -> tuple[np.ndarray, float]:
+    """(``load_map`` result, ``seam_score`` at NATIVE resolution) from one decode.
+
+    The seam test must see the stored pixels: downsampling does not wrap the
+    edges, so every large tileable map would otherwise grow a fake seam.
+    """
+    from PIL import Image
+    im = Image.open(path)
+    im.load()
+    score = seam_score(_native_gray(im), **seam_kw)
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.BILINEAR)
+    return _to_float(im), score
+
+
+def _native_gray(im) -> np.ndarray:
+    """Full-resolution single-channel float32 (mean of RGB, as ``_gray``) without a float RGB copy."""
+    if im.mode in ("F", "I;16", "I;16B", "I;16L", "I", "L"):
+        return _to_float(im)[..., 0]
+    if im.mode not in ("RGB", "RGBA"):
+        im = im.convert("RGB")
+    w, h = im.size
+    g = np.empty((h, w), np.float32)
+    for r0 in range(0, h, 512):          # row bands: no full-size uint8 / float RGB copy
+        band = np.asarray(im.crop((0, r0, w, min(r0 + 512, h))))
+        g[r0:r0 + band.shape[0]] = band[..., :3].mean(axis=-1, dtype=np.float32)
+    g /= np.float32(255.0)
+    return g
 
 
 def load_crop(path: str, side: int = 1024) -> np.ndarray:
@@ -46,13 +99,11 @@ def load_crop(path: str, side: int = 1024) -> np.ndarray:
         cw, ch = min(w, side), min(h, side)
         x0, y0 = (w - cw) // 2, (h - ch) // 2
         im = im.crop((x0, y0, x0 + cw, y0 + ch))
-    mode_max = 65535.0 if im.mode in ("I;16", "I;16B", "I") else 255.0
-    if im.mode not in ("L", "RGB", "RGBA", "I;16", "I;16B", "I"):
-        im = im.convert("RGB"); mode_max = 255.0
-    a = np.asarray(im).astype(np.float32) / mode_max
-    if a.ndim == 2:
-        a = a[..., None]
-    return np.clip(a, 0.0, 1.0)
+    return _to_float(im)
+
+
+#: Maps smaller than this (either side) are too small for gradient / seam statistics.
+MIN_ANALYSIS_SIDE = 8
 
 
 def _gray(a: np.ndarray) -> np.ndarray:
@@ -277,26 +328,63 @@ def check_upscaled(a: np.ndarray, material: str, label: str, max_score: float = 
 
 # ---------------------------------------------------------------- tiling
 
-def seam_score(a: np.ndarray) -> float:
-    """Largest z-score of the wrap-boundary step versus interior steps (values only).
-
-    A seamless tile has a wrap step drawn from the same distribution as interior
-    steps (z ≈ 0–2). A visible seam gives a large z. Autocorrelation is NOT a seam
-    test (any tiled image is periodic), see plan v3 finding #18.
+def _axis_steps(g: np.ndarray, axis: int, chunk: int = 512) -> tuple[np.ndarray, float]:
+    """Mean |step| between adjacent rows (``axis`` 0) or columns (1): the interior steps
+    and the wrap step (last → first). Chunked over rows so an 8192² map never needs a
+    second full-size float copy.
     """
-    g = _gray(a).astype(np.float64)
-    scores = []
+    h, w = g.shape
+    if axis == 0:
+        steps = np.empty(h - 1, np.float64)
+        for r0 in range(0, h - 1, chunk):
+            blk = g[r0:min(r0 + chunk + 1, h)].astype(np.float32, copy=False)
+            steps[r0:r0 + blk.shape[0] - 1] = np.abs(np.diff(blk, axis=0)).mean(axis=1)
+        wrap = float(np.abs(g[0].astype(np.float64) - g[-1]).mean())
+    else:
+        acc = np.zeros(w - 1, np.float64)
+        wrap_sum = 0.0
+        for r0 in range(0, h, chunk):
+            blk = g[r0:r0 + chunk].astype(np.float32, copy=False)
+            acc += np.abs(np.diff(blk, axis=1)).sum(axis=0, dtype=np.float64)
+            wrap_sum += float(np.abs(blk[:, 0].astype(np.float64) - blk[:, -1]).sum())
+        steps, wrap = acc / h, wrap_sum / h
+    return steps, wrap
+
+
+def seam_score(a: np.ndarray, tail_ratio: float = 1.5, sigma_floor: float = 2e-4) -> float:
+    """Robust z of the wrap-boundary step above the tile's own largest interior step.
+
+    Per axis: mean |step| between every pair of adjacent rows (columns) at native
+    resolution; the wrap step joins the last row to the first. With median and
+    σ = 1.4826·MAD of the interior steps (floor ``sigma_floor``):
+
+        z_wrap = (wrap − median) / σ,  z_tail = (largest interior step − median) / σ
+        score  = max(0, z_wrap − tail_ratio · z_tail)
+
+    A seamless tile has a wrap step drawn from the interior distribution, so it
+    never exceeds ``tail_ratio`` × the largest interior step and scores 0 at any
+    cyclic offset — including when a plank edge or grout line sits on the border
+    (that step recurs inside the tile). A non-tileable edge is a step the tile
+    has nowhere else. Autocorrelation is NOT a seam test (any tiled image is
+    periodic), see plan v3 finding #18.
+    """
+    g = a if a.ndim == 2 else _gray(a)
+    scores = [0.0]
     for axis in (0, 1):
-        x = g if axis == 1 else g.T
-        interior = np.abs(np.diff(x, axis=1)).mean(axis=0)   # mean |step| per interior column
-        wrap = np.abs(x[:, 0] - x[:, -1]).mean()
-        mu, sd = interior.mean(), interior.std() + 1e-9
-        scores.append((wrap - mu) / sd)
+        if g.shape[axis] < MIN_ANALYSIS_SIDE:
+            continue
+        steps, wrap = _axis_steps(g, axis)
+        med = float(np.median(steps))
+        sd = max(1.4826 * float(np.median(np.abs(steps - med))), sigma_floor)
+        z_wrap, z_tail = (wrap - med) / sd, (float(steps.max()) - med) / sd
+        scores.append(z_wrap - tail_ratio * max(z_tail, 0.0))
     return float(max(scores))
 
 
-def check_seam(a: np.ndarray, material: str, label: str, z_max: float = 4.0) -> list[Finding]:
-    z = seam_score(a)
+def check_seam(a: Optional[np.ndarray], material: str, label: str, z_max: float = 4.0,
+               score: Optional[float] = None, tail_ratio: float = 1.5) -> list[Finding]:
+    """``score`` from ``load_map_and_seam`` (native pixels) wins over scoring ``a``."""
+    z = seam_score(a, tail_ratio) if score is None else score
     if z > z_max:
         return [Finding("M005", Severity.ERROR, material,
                         f"Visible tiling seam (score {z:.1f}, limit {z_max:.0f})",
@@ -314,6 +402,8 @@ def normal_height_agreement(normal: np.ndarray, height: np.ndarray) -> tuple[flo
     """
     n = normal[..., :3] * 2.0 - 1.0
     h = _gray(height).astype(np.float64)
+    if min(h.shape) < 2:
+        return 0.0, 0.0   # np.gradient needs two samples per axis
     gy, gx = np.gradient(h)
     # image rows grow downwards, so +Y (up) in tangent space is −d/drow
     exp_x, exp_y = -gx, gy
@@ -331,7 +421,14 @@ def check_normal_convention(normal: np.ndarray, height: np.ndarray, material: st
 
     corr_x is convention-independent (X is never flipped), so a strongly negative
     corr_x means the height map is inverted (pits read as bumps), not a DirectX map.
+    Maps under ``MIN_ANALYSIS_SIDE`` (1×1 flat-normal placeholders) give an M900 info.
     """
+    small = [x for x in (normal, height) if min(x.shape[:2]) < MIN_ANALYSIS_SIDE]
+    if small:
+        hh, ww = small[0].shape[:2]
+        return [Finding("M900", Severity.INFO, material, "Map too small to compare normal and height",
+                        f"{ww}×{hh} px; the normal/height comparison needs at least "
+                        f"{MIN_ANALYSIS_SIDE}×{MIN_ANALYSIS_SIDE}.", None, label)]
     if normal.shape[:2] != height.shape[:2]:
         from PIL import Image
         h_img = Image.fromarray((np.clip(_gray(height), 0, 1) * 255).astype(np.uint8))

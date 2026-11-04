@@ -10,7 +10,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # MAXScript / Python files that resolve the MatForge root at runtime
-PATH_FILES = ["install_matforge.ms", "matforge_macros.ms", "matforge_panel.ms",
+PATH_FILES = ["install_matforge.ms", "matforge_macros.ms",
               "matforge_diagnose.ms", "run_matforge.py", "mfconfig.py",
               "maxplugin/forge_max.py",
               "packaging/MatForge.bundle/Contents/scripts/matforge_startup.ms"]
@@ -55,9 +55,10 @@ def test_package_contents_xml(bundle):
 def test_runtime_present(bundle):
     s = bundle / "Contents" / "scripts"
     for rel in ("matphys/__init__.py", "maxplugin/builder_corona.py",
-                "maxplugin/forge_max.py", "core/maps.py", "ui/panel.html",
+                "maxplugin/forge_max.py", "core/maps.py", "forgeui/__init__.py", "forgeui/widgets.py",
+                "maxplugin/forge_qt.py",
                 "run_matforge.py", "forge_cli.py", "forge_fal.py", "mfconfig.py",
-                "matforge_macros.ms", "matforge_panel.ms", "matforge_diagnose.ms",
+                "matforge_macros.ms", "matforge_diagnose.ms",
                 "matforge_startup.ms"):
         assert (s / rel).is_file(), rel
 
@@ -98,9 +99,10 @@ def test_macros_bake_resolved_root():
     src = (ROOT / "matforge_macros.ms").read_text(encoding="utf-8")
     assert "global MatForgeRoot = @\\\"\" + root" in src
     assert "local p = @\\\"\" + root" in src
-    for name in ("MatForge_Open", "MatForge_Panel", "MatForge_Diagnose"):
+    for name in ("MatForge_Open", "MatForge_Diagnose"):
         assert name in src
-    for ms in ("install_matforge.ms", "matforge_panel.ms", "matforge_diagnose.ms"):
+    assert "MatForge_Panel" not in src
+    for ms in ("install_matforge.ms", "matforge_diagnose.ms"):
         assert "getThisScriptFilename()" in (ROOT / ms).read_text(encoding="utf-8"), ms
 
 

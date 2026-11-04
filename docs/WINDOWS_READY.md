@@ -28,6 +28,7 @@ pytest logs, summary.txt). No keys or key files are read or collected.
 2. `docs/VERIFY_CORONA.md`
 3. `inspector/docs/VERIFY.md`
 4. `docs/VERIFY_INSTALL.md`
-5. `inspector/docs/FIRST_WINDOWS_SESSION.md` steps 3-5 (panel on a real scene, normal-map convention, batch scan)
+5. `inspector/docs/FIRST_WINDOWS_SESSION.md` steps 3-5 (dock on a real scene, normal-map convention, batch scan)
+6. `docs/ui/screens` vs the real dock: dark theme matches, nothing clipped at 360 px dock width
 
 Report each item as pass/fail with a screenshot or the relevant log lines.

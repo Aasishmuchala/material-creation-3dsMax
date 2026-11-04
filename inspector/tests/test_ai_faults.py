@@ -1,5 +1,7 @@
 """AI-generator fault signatures: M010 baked lighting, M013 upscaled, M012 height polarity,
 widened M003, and the R020 aggregate (M003 + M004 only until M010/M013 are calibrated)."""
+import dataclasses
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -7,6 +9,7 @@ from PIL import Image
 from material_inspector.core import map_checks as mc
 from material_inspector.core.inspector import InspectorOptions, inspect
 from material_inspector.core.model import ColorSpace, MaterialRecord, Renderer, SlotRole, TextureRef
+from material_inspector.core.rules import DEFAULT_CONFIG
 from tests.test_map_checks import noise, normal_from_height
 
 N = 1024
@@ -275,6 +278,9 @@ def test_uncalibrated_m010_m013_do_not_raise_r020(tmp_path):
                        textures=[TextureRef(SlotRole.BASE_COLOR, alb, ColorSpace.SRGB, file_exists=True),
                                  TextureRef(SlotRole.ROUGHNESS, rgh, ColorSpace.LINEAR, file_exists=True)])
     got = ids(inspect([m]))
+    assert "M010" in got and "M013" not in got and "R020" not in got      # M013 is off by default
+    on = InspectorOptions(config=dataclasses.replace(DEFAULT_CONFIG, experimental_off=()))
+    got = ids(inspect([m], on))
     assert "M010" in got and "M013" in got and "R020" not in got
 
 

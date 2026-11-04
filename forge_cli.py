@@ -16,10 +16,33 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.maps import generate_maps
 from core.recipes import RECIPES, RESOLUTIONS
+from maxplugin.inputs import default_out_dir, image_problem
+
+
+class JsonArgParser(argparse.ArgumentParser):
+    """Argument errors still end with the one-JSON-line contract on stdout."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(json.dumps({"ok": False, "error": "bad arguments: %s" % message}))
+        raise SystemExit(2)
+
+
+def _stderr_progress(n, total, label):
+    print("PROGRESS %d/%d %s" % (n, total, label), file=sys.stderr)
+    sys.stderr.flush()
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="MatForge map generator")
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print(json.dumps({"ok": False, "error": "cancelled"}))
+        return 130
+
+
+def _main(argv):
+    ap = JsonArgParser(description="MatForge map generator")
     ap.add_argument("image", help="reference image path")
     ap.add_argument("--name", required=True, help="material name")
     ap.add_argument("--type", required=True, choices=sorted(RECIPES),
@@ -30,22 +53,32 @@ def main(argv=None):
                     help="output dir (default: <image dir>/<name>_maps)")
     ap.add_argument("--no-seamless", action="store_true",
                     help="skip edge cross-blend tiling")
+    ap.add_argument("--progress", action="store_true",
+                    help="print PROGRESS n/total label lines to stderr")
     args = ap.parse_args(argv)
 
     if not os.path.isfile(args.image):
         ap.error(f"image not found: {args.image}")
-    out_dir = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(args.image)), f"{args.name}_maps")
+    problem = image_problem(args.image)
+    if problem:
+        print(json.dumps({"ok": False, "error": problem}))
+        return 1
+    try:
+        out_dir = args.out or default_out_dir(args.image, args.name)
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return 1
 
     # Always end with a machine-readable line so the Max plugin can tell a
     # read-only path / corrupt image / decode failure apart from success,
     # instead of only seeing a bare non-zero exit + traceback.
+    progress = _stderr_progress if args.progress else None
     try:
         warnings = []
         maps = generate_maps(args.image, out_dir, mclass=args.mclass,
                              resolution=args.res,
                              seamless=not args.no_seamless, warnings=warnings,
-                             name=args.name)
+                             name=args.name, progress=progress)
         manifest = {"schema": 1, "name": args.name, "class": args.mclass,
                     "res": args.res, "maps": maps, "warnings": warnings}
         manifest_path = os.path.join(out_dir, "manifest.json")

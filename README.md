@@ -15,10 +15,8 @@ Material Editor sphere, optionally assigned to selection.
   name drift across V-Ray 5/6/7 logs a MISS instead of crashing. Metalness maps
   need V-Ray 5+ (all supported Max versions ship it). Confirmed `SMOKE_OK` on
   Max 2026 + V-Ray 7.30.
-- **UI**: the web **panel** needs the embedded IE-based WebBrowser (fine on
-  most setups; the installer sets IE11 emulation). If it won't render (IE
-  removed / newer .NET), the **rollout** — "MatForge (simple)" — is a pure
-  MAXScript UI that works on every version with no browser at all.
+- **UI**: a native Qt dock (PySide6, or PySide2 on older Max). If PySide is missing the
+  classic rollout opens instead and the Listener says so.
 - `pymxs.undo` is used only if present (older builds fall back to a no-op).
 
 ## Install
@@ -41,8 +39,7 @@ with `pip install -r requirements.txt` (Pillow + numpy) for map generation.
 **Run-from-repo route (dev box)**
 1. Clone/copy the repo anywhere.
 2. Scripting > Run Script... > **`install_matforge.ms`** from that folder —
-   registers the **MatForge** actions with that folder baked in, sets the IE11
-   emulation the panel needs, and opens the rollout. Re-run it if you move the
+   registers the **MatForge** actions with that folder baked in and opens MatForge. Re-run it if you move the
    folder. Then add the toolbar button as in step 3 above.
 
 `run_matforge.py` finds its folder from `__file__`, else the `MATFORGE_ROOT`
@@ -52,34 +49,38 @@ actions set. Keys: `_keys.json` beside the plugin files if one exists
 Settings tab saves them on a bundle install). Both are git-ignored and never
 bundled. On-box checks for this: `docs/VERIFY_INSTALL.md`.
 
-## Use — the panel (dark, three tabs)
-- **CREATE** — pick a reference, name it, choose material type, resolution, and
-  **Engine**:
-  - **Fast** — deterministic heuristic maps, offline, no key.
-  - **Ultra** — fal **PATINA** extract maps (studio-grade de-lit, real
-    metalness; 2x/4x upscale is requested but real 4K output is unverified
-    until a live run, see `docs/PATINA_ENDPOINT.md`) with a **Fable-5** vision prompt written from the photo.
-  **Renderer** — Auto (the active renderer), V-Ray, Corona, or Both (V-Ray in
-    the chosen slot, Corona in the next). The rollout has the same dropdown. For
-    `metal_*` classes a **Metal** picker appears (measured n,k; default "from image").
-  → **Create Material → Sphere** drops the wired VRayMtl on a Material Editor
-  sphere; tick "Assign to selected objects" to also apply it (+ displacement).
-- **SETTINGS** — paste your **fal** and **omega (Fable-5)** keys; saved to
-  `_keys.json` (git-ignored; see Install for where), overriding the built-in fallback.
-- **HELP** — a Fable-5 chat for when you're stuck on MatForge / V-Ray / workflow.
+## Use
+Open **MatForge** from the toolbar. It docks on the right.
+1. Drop a photo of the material on the dock (or press **Browse...**).
+2. Pick what it is (Wood, Stone, Metal, Glass, Fabric, Plastic, Other). Generic is preselected.
+3. Press **Make material**.
 
-A plain rollout (`run_matforge.py`, action "MatForge (simple)") is the fallback
-if the embedded browser won't render on your box.
+**Quality** has two choices. **Standard** is free and offline (10 to 60 seconds). **Best** uses
+the fal AI backend and needs a fal key (about a minute). Add keys under the gear button
+(**Settings**); the same sheet has an **Ask a question** field for help.
+
+**More options** holds Renderer (Auto, V-Ray, Corona, Both), Metal (for metal types), Size
+(2K, 4K, 8K), **Make it tile seamlessly**, **Put on selected objects** and **Open in Slate**.
+
+When it finishes, the Done screen shows the material name, its slot per renderer, five map
+thumbnails (Colour, Roughness, Normal, Height, Metalness), and notes. From there you can put it
+on the selected objects, open it in Slate, or press **Make another**. **Cancel** stops a running job.
+
+If PySide is missing the classic rollout opens and the Listener says so
+(`[MatForge] Qt dock unavailable (...)`). You can also open it by hand with `forge_max.show_rollout()`.
+
+![MatForge dock with a photo loaded](docs/ui/screens/matforge_loaded_400.png)
+![Material Inspector results](docs/ui/screens/inspector_results_400.png)
 
 ## Plugin files
 ```
 install_matforge.ms   run once (run-from-repo) -> MatForge toolbar actions
 matforge_macros.ms    shared: registers the macros with a resolved folder baked in
 packaging/MatForge.bundle  ApplicationPlugins template (tools/build_matforge_bundle.py)
-matforge_panel.ms     hosts ui/panel.html in a dockable Max webview + bridge
-ui/panel.html         the dark REFGRADE-style control panel
-run_matforge.py       opens the simple rollout (fallback)
-maxplugin/forge_max.py  UI backend: engine routing (Fast/Ultra) + panel bridge
+run_matforge.py       opens the MatForge dock (classic rollout if Qt is missing)
+maxplugin/forge_qt.py  the MatForge dock (PySide6/PySide2)
+forgeui/              shared Qt kit used by MatForge and the Inspector
+maxplugin/forge_max.py  UI backend: engine routing (Fast/Ultra) + classic rollout
 ```
 
 ## Physics layer (`matphys/`)

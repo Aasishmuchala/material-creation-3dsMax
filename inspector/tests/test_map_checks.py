@@ -18,10 +18,19 @@ def noise(n=128, seed=0, smooth=4):
 def test_seamless_tile_passes_and_seam_fails():
     a = noise()
     assert mc.check_seam(a, "m", "x") == []
-    b = a.copy()
-    b[:, : b.shape[1] // 2] = np.clip(b[:, : b.shape[1] // 2] + 0.3, 0, 1)  # steps at the wrap and mid-tile
+    # a non-tileable edge: brightness ramps across the tile, so only the wrap has the jump
+    b = np.clip(a + 0.3 * np.linspace(0, 1, a.shape[1])[None, :, None], 0, 1)
     assert mc.seam_score(b) > mc.seam_score(a)
     assert mc.check_seam(b, "m", "x")[0].rule_id == "M005"
+
+
+def test_step_that_recurs_inside_the_tile_is_not_a_seam():
+    # half the tile offset: the wrap step equals the mid-tile step (a 2-plank / 2-tile layout),
+    # so the border is not unusual for this tile (stress B1)
+    a = noise()
+    b = a.copy()
+    b[:, : b.shape[1] // 2] = np.clip(b[:, : b.shape[1] // 2] + 0.3, 0, 1)
+    assert mc.check_seam(b, "m", "x") == []
 
 
 def test_albedo_dark_and_bright_fractions():

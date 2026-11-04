@@ -1,12 +1,25 @@
 """Conductor Fresnel and the Gulbrandsen (2014) artist-friendly edge tint.
 
 All inputs are the complex index n + ik of the metal against air (n0 = 1).
+n and k are clamped to [0, NK_MAX] (NaN -> 0) before use: real optical
+constants stay far below 1e3, and the cap keeps every intermediate square
+finite so no function here overflows or returns NaN.
 """
 import math
+
+NK_MAX = 1e6
+
+
+def _nk(x):
+    x = float(x)
+    if x != x:
+        return 0.0
+    return min(max(x, 0.0), NK_MAX)
 
 
 def f0(n, k):
     """Normal-incidence reflectance ((n-1)^2 + k^2) / ((n+1)^2 + k^2)."""
+    n, k = _nk(n), _nk(k)
     return ((n - 1.0) ** 2 + k * k) / ((n + 1.0) ** 2 + k * k)
 
 
@@ -18,7 +31,9 @@ def fresnel_conductor(n, k, cos_theta):
     with 2a^2 = sqrt((n^2-k^2-sin^2)^2 + 4n^2k^2) + (n^2-k^2-sin^2)
          2b^2 = sqrt((n^2-k^2-sin^2)^2 + 4n^2k^2) - (n^2-k^2-sin^2)
     """
-    c = min(max(float(cos_theta), 0.0), 1.0)
+    n, k = _nk(n), _nk(k)
+    c = float(cos_theta)
+    c = 0.0 if c != c else min(max(c, 0.0), 1.0)
     if c <= 0.0:
         return 1.0
     s2 = 1.0 - c * c
@@ -45,6 +60,7 @@ def edge_tint(n, k):
     r = f0; n_min = (1-r)/(1+r); n_max = (1+sqrt r)/(1-sqrt r);
     n = g*n_min + (1-g)*n_max  =>  g = (n_max - n) / (n_max - n_min), clamped 0-1.
     """
+    n, k = _nk(n), _nk(k)
     r = min(max(f0(n, k), 0.0), 0.999999)
     sr = math.sqrt(r)
     n_min = (1.0 - r) / (1.0 + r)

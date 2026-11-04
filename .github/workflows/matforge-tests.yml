@@ -1,9 +1,9 @@
 name: matforge-tests
 on:
   push:
-    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
+    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'forgeui/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
   pull_request:
-    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
+    paths: ['core/**', 'maxplugin/**', 'matphys/**', 'forgeui/**', 'tests/**', 'forge_*.py', 'mfconfig.py', 'requirements.txt', '.github/workflows/matforge-tests.yml']
 jobs:
   tests:
     strategy:
@@ -32,7 +32,7 @@ jobs:
           python -c "
           import ast, pathlib
           files = [pathlib.Path(f) for f in ('HEADLESS_SMOKE.py', 'MAX_SMOKE.py')]
-          for d in ('maxplugin', 'matphys', 'core'):
+          for d in ('maxplugin', 'matphys', 'core', 'forgeui'):
               files += sorted(pathlib.Path(d).rglob('*.py'))
           bad = 0
           for f in files:

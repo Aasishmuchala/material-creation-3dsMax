@@ -139,6 +139,8 @@ class Finding:
     detail: str = ""
     fix: Optional[FixAction] = None
     texture: Optional[str] = None
+    #: Index into the materials list passed to inspect(); filled by inspect(). None for scan-level notes.
+    material_index: Optional[int] = field(default=None, compare=False)
 
     @property
     def fixable(self) -> bool:

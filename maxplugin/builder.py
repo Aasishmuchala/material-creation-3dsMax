@@ -78,8 +78,23 @@ def _set_first(obj, candidates, value, what=""):
     return None
 
 
-def _color(rgb):
+def _color_raw(rgb):
+    """Unclamped 0-1 -> 0-255 Color. Only for values that are not colours
+    (Corona Complex IOR n,k, written raw x255; VERIFY_CORONA type/scale)."""
     return rt.Color(rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0)
+
+
+def _color(rgb):
+    """0-1 RGB -> Color, each channel clamped to [0, 1] (NaN -> 0). A bad
+    table value is logged instead of reaching the swatch out of range."""
+    vals = []
+    for c in rgb[:3]:
+        c = float(c)
+        vals.append(0.0 if c != c else min(max(c, 0.0), 1.0))
+    if vals != [float(c) for c in rgb[:3]]:
+        _log(f"  colour {tuple(rgb[:3])} clamped to "
+             f"({vals[0]:.4f}, {vals[1]:.4f}, {vals[2]:.4f})")
+    return _color_raw(vals)
 
 
 def _swatch(rgb_linear):
@@ -130,6 +145,10 @@ def _bitmap_tex(path, linear=False):
             return tex
         except Exception as e:  # very old builds without gamma kwarg
             _log(f"  openBitMap(gamma=1.0) failed ({e}); filename fallback")
+            # the data map now loads at the default (sRGB) input gamma: a
+            # MISS so forge_max surfaces it in the UI note
+            _log(f"  MISS: gamma not applied to {os.path.basename(path)} "
+                 f"(data map loaded at default input gamma)")
     # albedo, or linear fallback: inherit default input gamma
     _set_first(tex, ["filename", "fileName"], path, "bitmap filename")
     return tex
@@ -156,7 +175,9 @@ def build_material(maps, name, mclass, metal=None):
 
     # --- diffuse ---
     if "albedo" in maps:
-        mat.texmap_diffuse = _bitmap_tex(maps["albedo"], linear=False)
+        _set_first(mat, ["texmap_diffuse"],
+                   _bitmap_tex(maps["albedo"], linear=False),
+                   "albedo map slot")
     if f0_mode:
         # measured F0 as the swatch; albedo map kept at 30 % so scratches /
         # patina survive without re-tinting
@@ -213,15 +234,20 @@ def build_material(maps, name, mclass, metal=None):
     if refr:
         _set_first(mat, ["refraction"], _color((1.0, 1.0, 1.0)),
                    "refract color")
-        fog_color, fog_mult, r_ior = (refr["fog_color"], refr["fog_mult"],
-                                      refr["ior"])
+        r_ior = refr["ior"]
+        thickness = float(refr.get("thickness_mm") or 10.0)
         if refr.get("glass"):
             # measured glass: IOR + absorption from matphys (one source)
             g = refr["glass"]
             r_ior = matphys.glass_ior(g)
-            fog_color, fog_mult = matphys.to_vray_fog(
-                matphys.glass_sigma_mm(g), refr["thickness_mm"],
-                _mm_per_scene_unit())
+            sigma = matphys.glass_sigma_mm(g)
+        else:
+            # no named glass (gemstone): the recipe fog colour is the
+            # transmittance of one thickness_mm pane, same as Corona
+            sigma = matphys.sigma_from_transmittance(refr["fog_color"],
+                                                     thickness)
+        fog_color, fog_mult = matphys.to_vray_fog(sigma, thickness,
+                                                  _mm_per_scene_unit())
         _set_first(mat, ["refraction_ior", "refractionIOR"], r_ior,
                    "refraction IOR")
         _set_first(mat, ["refraction_fogColor", "refraction_fog_color",
@@ -458,20 +484,53 @@ def _remove_matforge_disp(node):
         _log(f"  could not check existing displacement mods: {e}")
 
 
-def _validate_manifest(mf):
+MAX_NAME_LEN = 120
+
+
+def _validate_manifest(mf, base_dir=None):
     """Fail fast with a clear error on a malformed/future manifest, and
     confirm every referenced map file exists (else V-Ray wires black swatches
-    with no obvious cause)."""
+    with no obvious cause).
+
+    Normalises mf in place: the name is capped at MAX_NAME_LEN characters and
+    relative map paths are resolved against base_dir (the manifest's folder),
+    never the process cwd (in Max, the install dir).
+    """
+    if not isinstance(mf, dict):
+        raise ValueError("manifest must be a JSON object, got "
+                         f"{type(mf).__name__}")
     for key in ("name", "class", "maps"):
         if key not in mf:
             raise ValueError(f"manifest missing required key '{key}'")
-    if mf["class"] not in RECIPES:
-        raise ValueError(f"manifest class '{mf['class']}' is not a known "
+    name = mf["name"]
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("manifest 'name' must be a non-empty string, got "
+                         f"{name!r}")
+    if len(name) > MAX_NAME_LEN:
+        _log(f"  material name capped at {MAX_NAME_LEN} characters")
+        mf["name"] = name[:MAX_NAME_LEN]
+    if not isinstance(mf["class"], str) or mf["class"] not in RECIPES:
+        raise ValueError(f"manifest class {mf['class']!r} is not a known "
                          f"MatForge material class")
-    if mf.get("metal") and mf["metal"] not in matphys.METALS:
-        raise ValueError(f"manifest metal '{mf['metal']}' is not a known "
+    metal = mf.get("metal")
+    if metal is not None and not isinstance(metal, str):
+        raise ValueError(f"manifest 'metal' must be a string or null, got "
+                         f"{metal!r}")
+    if metal and metal not in matphys.METALS:
+        raise ValueError(f"manifest metal '{metal}' is not a known "
                          f"metal")
-    missing = [f"{k}={p}" for k, p in mf["maps"].items()
+    maps = mf["maps"]
+    if not isinstance(maps, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in maps.items()):
+        raise ValueError("manifest 'maps' must be an object of "
+                         "map name -> file path strings")
+    if base_dir:
+        mf["maps"] = maps = {
+            k: (p if os.path.isabs(p)
+                else os.path.normpath(os.path.join(base_dir, p)))
+            for k, p in maps.items()}
+    missing = [f"{k}={p}" for k, p in maps.items()
                if not os.path.isfile(p)]
     if missing:
         raise FileNotFoundError("manifest map file(s) not found: "
@@ -520,7 +579,7 @@ def build_from_manifest(manifest_path, slot=None, assign=False, slate=False,
                         renderer="auto", metal=None, corona_bitmap=False):
     with open(manifest_path, "r", encoding="utf-8") as f:
         mf = json.load(f)
-    _validate_manifest(mf)
+    _validate_manifest(mf, os.path.dirname(os.path.abspath(manifest_path)))
     resolved = resolve_renderer(renderer)
     metal = metal or mf.get("metal")
     want_v = resolved in ("vray", "both")
@@ -536,8 +595,8 @@ def build_from_manifest(manifest_path, slot=None, assign=False, slate=False,
         if want_v:
             mats["vray"] = build_material(mf["maps"], mf["name"], mf["class"],
                                           metal=metal)
-            vlog = list(LOG)
             s = put_in_editor(mats["vray"], slot)
+            vlog = list(LOG)   # after placement: keep the slot line too
             built.append({"renderer": "vray",
                           "material": mats["vray"].name, "slot": s})
         if want_c:

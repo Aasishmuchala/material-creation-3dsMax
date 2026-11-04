@@ -2,9 +2,8 @@
     and the ApplicationPlugins bundle startup (Contents/scripts/matforge_startup.ms).
 
     matforgeRegisterMacros root
-        root = the folder holding run_matforge.py / matforge_panel.ms /
-               matforge_diagnose.ms (no trailing slash). Defines the three
-               MatForge macroScripts with that folder BAKED IN as a literal.
+        root = the folder holding run_matforge.py / matforge_diagnose.ms
+               (no trailing slash). Defines the two MatForge macroScripts with that folder BAKED IN as a literal.
 
     Why the macro source is generated and `execute`d: 3ds Max serializes each
     macroScript to ...\usermacros\MatForge-*.mcr and reloads it on every
@@ -40,12 +39,9 @@ fn matforgeRegisterMacros root = (
     root = trimRight root "\\/"
     local ok = true
     local defs = #(
-        -- reliable native rollout (RECOMMENDED default)
-        #("MatForge_Open", "MatForge - reference image to V-Ray material",
+        -- the MatForge dock (run_matforge.py opens the classic rollout if Qt is missing)
+        #("MatForge_Open", "MatForge - photo to V-Ray and Corona material",
           "MatForge", "run_matforge.py", "python.ExecuteFile"),
-        -- fancy dark web panel (Create / Settings / Help chat) -- needs the webview
-        #("MatForge_Panel", "MatForge - dark web panel (needs the embedded browser)",
-          "MatForge panel", "matforge_panel.ms", "fileIn"),
         -- layer-by-layer self-test (run this if anything looks broken)
         #("MatForge_Diagnose", "MatForge - self-test / diagnostic",
           "MatForge diagnose", "matforge_diagnose.ms", "fileIn")
