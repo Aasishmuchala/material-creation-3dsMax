@@ -150,7 +150,12 @@ BITMAP_CLASSES = {
                       # (see BITMAP_GAMMA) — the path MatForge uses and verified.
                       "color_space": ["colorspace", "colorSpace"]},
     "VRayBitmap": {"path": ["HDRIMapName", "fileName", "filename"],
-                   # int: 0 none/linear, 1 inverse gamma, 2 sRGB (VRayHDRI legacy). UNVERIFIED
+                   # color_space is the transfer function (pb2vrayhdri.h, V-Ray 7.30.02
+                   # SDK): 0 none, 1 gamma, 2 sRGB, 3 from 3ds Max, 4 auto (default).
+                   # Measured by MatForge on Max 2026.2 under OCIO: 0, 1 and 3 read a
+                   # 50 % grey PNG as 0.502 (raw), 2 and 4 as 0.216 (sRGB).
+                   # rgbColorSpace is a different setting, the primaries (0 default,
+                   # 1 sRGB, 2 ACEScg, 3 raw): its values do not mean the above.
                    "color_space": ["color_space", "colorSpace", "rgbColorSpace"]},
     "VRayHDRI": {"path": ["HDRIMapName"], "color_space": ["color_space"]},
     "CoronaBitmap": {"path": ["filename", "fileName"],
@@ -159,9 +164,48 @@ BITMAP_CLASSES = {
 
 #: Bitmaptexture colour handling MatForge verified on Max 2026: data maps are loaded
 #: with ``tex.bitmap = openBitMap(path, gamma=1.0)``; colour maps inherit the default
-#: input gamma. VRayBitmap's colour_space enum drifts between versions (MatForge note).
+#: input gamma. On a file that is already loaded, openBitMap returns Max's cached copy
+#: at the old gamma, so fixes.py detaches the bitmap and flushes the cache first.
+#: VRayBitmap's colour_space enum drifts between versions (MatForge note).
 BITMAP_GAMMA = {"bitmap_prop": "bitmap", "gamma_prop": "gamma",
                 "linear_max": 1.05, "srgb_min": 1.8}
+
+# Under OCIO colour management (the 3ds Max 2024+ default) the bitmap's gamma is
+# meaningless (it reads 2.2 for every map, raw ones included) and openBitMap's
+# gamma keyword is ignored: input rules decode every 8-bit PNG as sRGB. The truth
+# is the bitmap's colorSpace ("sRGB", or the config's DataColorSpace, "raw").
+# Verified on 3ds Max 2026.2: a 50 % grey data map opened with gamma 1.0 read
+# 0.216 (sRGB-decoded), opened with colorSpace "raw" it read 0.502.
+BITMAP_COLORSPACE_PROP = "colorSpace"
+
+
+def ocio_data_space(rt):
+    """The OCIO data (raw) colour-space name when Max runs OCIO, else None."""
+    try:
+        mode = str(rt.ColorPipelineMgr.Mode)
+    except Exception:
+        return None
+    if "OCIO" not in mode:
+        return None
+    try:
+        name = str(rt.ColorPipelineMgr.DataColorSpace or "")
+    except Exception:
+        name = ""
+    return name or "raw"
+
+
+def ocio_space_kind(name):
+    """'linear' | 'srgb' | None for an OCIO colour-space name."""
+    n = str(name or "").strip().lower()
+    if not n or n in ("default", "auto"):
+        return None
+    if "raw" in n or n in ("data", "non-color", "none"):
+        return "linear"
+    if "linear" in n or "acescg" in n or "aces2065" in n or n.startswith("lin_"):
+        return "linear"
+    if "srgb" in n or "gamma" in n or "encoded" in n:
+        return "srgb"
+    return None
 
 NORMAL_CLASSES = {
     "VRayNormalMap": {"input": ["normal_map", "normalMap"], "flip_green": ["flip_green", "flipGreen"]},

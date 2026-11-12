@@ -23,17 +23,21 @@ VRAYMTL_PROPS = frozenset({
     "diffuse", "texmap_diffuse",
     "reflection", "reflection_fresnel", "brdf_useRoughness",
     "texmap_reflectionGlossiness", "reflection_glossiness",
+    "texmap_reflectionGlossiness_multiplier",
     "reflection_metalness", "texmap_metalness", "anisotropy",
     "reflection_lockIOR",
     "refraction_ior", "refraction", "refraction_fogColor",
     "refraction_fogMult", "refraction_affectShadows", "refraction_thinWalled",
+    "refraction_fogDepth", "refraction_fogUnitsScale_on",  # V-Ray 5.1+ fog in cm
     "refraction_glossiness",  # frosted/etched glass (rough refraction)
     "texmap_opacity", "opacity_mode", "texmap_bump", "texmap_bump_multiplier",
     "texmap_displacement", "texmap_displacement_multiplier",
     "sheen_color", "sheen_glossiness", "coat_amount", "coat_glossiness",
-    "translucency_on", "translucency_color",
+    "translucency_on", "translucency_color", "translucency_amount",
+    "texmap_translucent", "texmap_sheen",  # SSS colour map, fibre sheen map
     "texmap_self_illumination", "selfIllumination",  # emissive / LED
     "selfIllumination_multiplier",
+    "compensate_camera_exposure", "selfIllumination_gi",  # emissive under a physical camera
     "texmap_diffuse_multiplier",
     "name",  # V-Ray 7: _on, not bare
 })
@@ -56,14 +60,29 @@ CORONA_MTL_PROPS = frozenset({
 CORONA_NORMAL_PROPS = frozenset({"normalMap", "flipGreen", "addGamma", "name"})
 CORONA_BITMAP_PROPS = frozenset({"filename", "gamma", "uvwRandomizer", "name"})
 CORONA_RND_PROPS = frozenset({"name"})
-TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "name"})
+TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "mult_by_front_diffuse", "name"})
+NOISE_PROPS = frozenset({"type", "size", "color1", "color2", "name"})
+COLORCORRECTION_PROPS = frozenset({"map", "brightness", "saturation", "hueShift", "name"})
+MULTI_PROPS = frozenset({"materialList", "name"})
 NORMALMAP_PROPS = frozenset({"normal_map", "name"})
 BITMAP_PROPS = frozenset({"filename", "fileName", "bitmap", "name"})
-DISP_PROPS = frozenset({"type", "amount", "texmap", "name"})
+DISP_PROPS = frozenset({"type", "amount", "shift", "texmap", "keepContinuity",
+                        "name"})
+VRAYBITMAP_PROPS = frozenset({"HDRIMapName", "color_space", "rgbColorSpace",
+                              "mapSource", "name"})
+UVW_RND_PROPS = frozenset({"mode_by_uv_tile", "mode_by_node_handle",
+                           "tile_blend", "variance_u_min", "variance_u_max",
+                           "variance_v_min", "variance_v_max",
+                           "variance_rot_min", "variance_rot_max", "name"})
 
 _SCHEMAS = {
+    "VRayBitmap": VRAYBITMAP_PROPS,
+    "VRayUVWRandomizer": UVW_RND_PROPS,
     "VRayMtl": VRAYMTL_PROPS,
     "VRay2SidedMtl": TWOSIDED_PROPS,
+    "Noise": NOISE_PROPS,
+    "ColorCorrection": COLORCORRECTION_PROPS,
+    "MultiMaterial": MULTI_PROPS,
     "VRayNormalMap": NORMALMAP_PROPS,
     "Bitmaptexture": BITMAP_PROPS,
     "VRayDisplacementMod": DISP_PROPS,
@@ -103,12 +122,14 @@ class MockColor:
 
 
 class MockBitmap:
-    def __init__(self, path, gamma=None):
+    def __init__(self, path, gamma=None, colorSpace=None):
         self.path = path
         self.gamma = gamma
+        self.colorSpace = colorSpace
 
     def __repr__(self):
-        return "Bitmap(%r, gamma=%r)" % (self.path, self.gamma)
+        return "Bitmap(%r, gamma=%r, colorSpace=%r)" % (self.path, self.gamma,
+                                                        self.colorSpace)
 
 
 class MockNode:
@@ -238,11 +259,36 @@ class MockRuntime:
     def VRay2SidedMtl(self):
         return self._node("VRay2SidedMtl")
 
+    def Noise(self):
+        return self._node("Noise")
+
+    def ColorCorrection(self):
+        return self._node("ColorCorrection")
+
+    def MultiMaterial(self, numsubs=10):
+        mm = self._node("MultiMaterial")
+        mm.props["subs"] = [None] * int(numsubs)
+        return mm
+
+    def setSubMtl(self, mm, index, mat):
+        mm.props["subs"][index - 1] = mat
+
+    def copy(self, node):
+        dup = MockNode(node.cls, node.schema)
+        dup.props.update(node.props)
+        return dup
+
     def VRayNormalMap(self):
         return self._node("VRayNormalMap")
 
     def Bitmaptexture(self):
         return self._node("Bitmaptexture")
+
+    def VRayBitmap(self):
+        return self._node("VRayBitmap")
+
+    def VRayUVWRandomizer(self):
+        return self._node("VRayUVWRandomizer")
 
     def VRayDisplacementMod(self):
         return self._node("VRayDisplacementMod")
@@ -278,8 +324,8 @@ class MockRuntime:
     def isProperty(self, obj, name):
         return hasattr(obj, "has_prop") and obj.has_prop(name)
 
-    def openBitMap(self, path, gamma=None):
-        return MockBitmap(path, gamma)
+    def openBitMap(self, path, gamma=None, colorSpace=None):
+        return MockBitmap(path, gamma, colorSpace)
 
     def addModifier(self, node, mod):
         node.modifiers.append(mod)

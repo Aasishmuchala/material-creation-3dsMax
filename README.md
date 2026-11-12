@@ -101,7 +101,9 @@ D65-weighted projection is future work.
   `docs/VERIFY_VRAY.md` (swatch row).
 
 ## Corona
-- Same 35 classes as V-Ray, built as `CoronaPhysicalMtl` by `maxplugin/builder_corona.py`.
+- Same 35 classes as V-Ray, built as `CoronaPhysicalMtl` by `maxplugin/builder_corona.py`;
+  a coloured gem or glass photo's body colour goes into the absorption colour,
+  as it goes into V-Ray's fog.
 - Named metals use Complex IOR (n,k) with a fallback to F0 base plus edge colour
   if the property is missing.
 - Displacement lives in the material (no modifier); foliage uses translucency and
@@ -112,13 +114,74 @@ D65-weighted projection is future work.
 ## What the wiring guarantees (per material class, from `core/recipes.py`)
 - Fresnel ON, IOR from physics table (1.5 dielectrics, 1.52 glass, ...)
 - Roughness mode ON, roughness map plugged directly (no gloss-invert errors)
-- Normal via VRayNormalMap at gamma 1.0; data maps loaded linear
-- Glass: thin-walled, fog clamped near-white, affect-shadows ON
-- Foliage: clip-mode opacity + VRay2SidedMtl translucency, **never refraction**
-- Fabric sheen, leather/lacquer coat, marble translucency, brushed-metal
-  anisotropy
+- Data maps (roughness, normal, height, opacity) load **raw in every colour
+  pipeline**: under 3ds Max 2024+ OCIO the gamma keyword is ignored and PNGs
+  decode as sRGB, so they open in the config's data colour space instead
+  (verified on Max 2026.2: gamma 1.0 read a 50 % grey as 0.216, raw read 0.502)
+- Normal via VRayNormalMap; coat and sheen glossiness written as roughness
+  (V-Ray 7 inverts them under Use roughness; refraction glossiness it does not)
+- Glass: thin-walled with one pane's measured transmittance as the tint; solid
+  glass, water and gems get fog in cm (colour = transmittance, depth =
+  thickness), so absorption is right in any scene units; a strongly coloured
+  photo (amethyst, bottle green) adds its body colour
+- Marble and wax: V-Ray 7 SSS mode with measured scatter radii (Jensen 2001)
+- Foliage: stochastic opacity + VRay2SidedMtl translucency, **never
+  refraction**; a leaf shot on a plain backdrop is keyed into a cut-out
+- Fabric sheen in the fibre's own colour, leather/lacquer coat, brushed-metal
+  anisotropy, emissive that reads under any camera exposure
 - AO map exported but not wired (V-Ray GI already occludes; baked AO
   double-darkens)
+- Uniform materials (fabric, velvet, leather, carpet, paint, cork, rubber,
+  plastics, sand, asphalt, metals, wax) get stochastic tiling when their maps
+  tile and carry no pattern (the manifest records `seamless`, and `pattern`
+  when the forge kept a stripe or check, which random offsets would break at
+  every repeat): every map is a
+  VRayBitmap driven by one shared VRayUVWRandomizer that offsets each texture
+  repeat at random, seeded per object too so matching cushions differ, and
+  blends it into its neighbours (offsets only, so normal maps stay right; data
+  maps raw, colour maps sRGB primaries, whatever the render settings). Their
+  displacement uses 3D mapping so the relief follows the same offsets. Wood,
+  stone, tiles and marble keep plain tiling so planks, joints and veins line up
+
+## How the maps are derived (`core/maps.py`, Standard quality)
+- De-lighting fits a smooth polynomial to the photo's lighting and divides it
+  out, so plank-to-plank and tile-to-tile tone survives
+- Height is band-limited luminance with a per-class relief model: wood grain,
+  joints, weave and pile are relief; marble veins, terrazzo chips and trowel
+  clouds are colour only (polished stone, glass and chrome stay flat)
+- Normals use periodic Scharr gradients scaled with resolution; upscaled
+  photos are band-limited to their native detail
+- Roughness comes from cavities plus tileable low-frequency variation, not
+  from the colour pattern
+- Tiling uses periodic + smooth decomposition (no mirrored ghost seams)
+- Uniform materials also lose brightness drift wider than ~1/16 of the tile
+  (leftover lighting), which tiled into a patchwork grid on a linen sofa. One
+  achromatic gain, held to 0.8-1.25, keeps every colour; a photo whose
+  tile-scale colour or tone varies like a pattern (stripes, checks, a print,
+  a dip-dye) or steps in sharp edges lined up across the tile (a tone-on-tone
+  stripe or check) is left alone, with a warning. Diagonal stripes are not
+  recognised
+- Laid tiles (zellige, terracotta) with a straight, regular grout grid are cut
+  into whole tiles at the joint centres measured in each row and column, and
+  re-laid at random in a grid that keeps the tile's shape, so the repeat ends
+  on grout (a photo's border never does) and no lattice of identical tiles
+  shows. The layout is found on the photo's 2K frame and seeded by the photo,
+  so 2K look-dev and a 4K or 8K final lay the same tiles, with every cut
+  re-centred on its joint at the output size. Tiles are turned only when no
+  light direction shows across them (a lit or shadowed bevel, a glint,
+  falloff, read out to the tile's edge), and the joints are sunk and matte in
+  the height and roughness. A tile whose joint wanders across the straight
+  cut along its own length would carry a sliver of its neighbour, so it is
+  left out of the re-lay. Running bond, hex, a photo turned more than
+  ~0.3 deg, a grid that is not regular and joints wandering off the cuts at
+  all but a few tiles are left as shot. The manifest's `grid_tiles` gives the
+  tiles per repeat
+
+The realism lab in `tools/realism_lab/` renders every class on a modelled
+room (sofa, tables, props) in V-Ray; `tools/apartment/` builds a whole
+two-bedroom flat with every surface made by MatForge. Both write 16-bit PNGs
+and dither them to 8 bits (`tools/render_post.py`): a denoised wall saved
+straight to 8 bits bands into pink and green contours.
 
 ## Architecture
 ```

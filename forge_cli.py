@@ -75,12 +75,23 @@ def _main(argv):
     progress = _stderr_progress if args.progress else None
     try:
         warnings = []
+        extra = {}
         maps = generate_maps(args.image, out_dir, mclass=args.mclass,
                              resolution=args.res,
                              seamless=not args.no_seamless, warnings=warnings,
-                             name=args.name, progress=progress)
+                             name=args.name, progress=progress, extra=extra)
+        # Whether the maps tile: the Max builder adds stochastic tiling only
+        # then. generate_maps never tiles a cut-out (opacity class).
+        seamless = (not args.no_seamless
+                    and not RECIPES[args.mclass].get("opacity"))
         manifest = {"schema": 1, "name": args.name, "class": args.mclass,
-                    "res": args.res, "maps": maps, "warnings": warnings}
+                    "res": args.res, "seamless": seamless, "maps": maps,
+                    "warnings": warnings}
+        if "roughness" in maps:
+            # what the roughness map was baked round: the builder rescales
+            # it when the recipe moves later
+            manifest["roughness_base"] = RECIPES[args.mclass]["base_roughness"]
+        manifest.update(extra)        # e.g. transmission_tint for coloured glass
         manifest_path = os.path.join(out_dir, "manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)

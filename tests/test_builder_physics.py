@@ -75,7 +75,9 @@ def test_glass_clear_fog_mm_scene():
     p = mat.props
     assert _close(p["refraction_fogColor"].as_unit(), (0.907, 0.970, 0.970),
                   0.005)
-    assert p["refraction_fogMult"] == pytest.approx(1 / 6.0, abs=1e-3)
+    # V-Ray reads fog per cm (refraction_fogUnitsScale_on): depth = 6 mm
+    assert p["refraction_fogUnitsScale_on"] is True
+    assert p["refraction_fogDepth"] == pytest.approx(0.6, abs=1e-9)
     assert p["refraction_ior"] == 1.52
 
 
@@ -83,7 +85,8 @@ def test_glass_clear_fog_cm_scene():
     b, rt = mock_pymxs.install(system_unit="cm")
     mat = b.build_material(MAPS, "G", "glass_clear")
     p = mat.props
-    assert p["refraction_fogMult"] == pytest.approx(10 / 6.0, abs=1e-3)
+    # same 0.6 cm depth in a cm scene: no per-scene-unit maths any more
+    assert p["refraction_fogDepth"] == pytest.approx(0.6, abs=1e-9)
     assert _close(p["refraction_fogColor"].as_unit(), (0.907, 0.970, 0.970),
                   0.005)
 
@@ -94,20 +97,20 @@ def test_water_fog():
     p = mat.props
     assert _close(p["refraction_fogColor"].as_unit(), (0.712, 0.945, 0.991),
                   0.005)
-    assert p["refraction_fogMult"] == pytest.approx(0.001, abs=1e-5)
+    assert p["refraction_fogDepth"] == pytest.approx(100.0, abs=1e-9)  # 1 m of water
 
 
 def test_gemstone_fog_through_matphys():
-    """Recipe fog_color = T at thickness_mm (10 mm); mult = mm_per_unit / d
-    like every glass (supersedes the old raw recipe fog_mult)."""
+    """Recipe fog_color = T at thickness_mm (10 mm); fog depth = 1 cm in
+    every scene unit, like every glass (V-Ray reads fog per cm)."""
     b, rt = mock_pymxs.install()
     mat = b.build_material(MAPS, "S", "gemstone")
     p = mat.props
     assert _close(p["refraction_fogColor"].as_unit(), (0.97, 0.99, 1.0), 0.003)
-    assert p["refraction_fogMult"] == pytest.approx(1 / 10.0, abs=1e-9)
+    assert p["refraction_fogDepth"] == pytest.approx(1.0, abs=1e-9)
     b, rt = mock_pymxs.install(system_unit="m")
     p = b.build_material(MAPS, "S", "gemstone").props
-    assert p["refraction_fogMult"] == pytest.approx(1000 / 10.0, abs=1e-6)
+    assert p["refraction_fogDepth"] == pytest.approx(1.0, abs=1e-9)
 
 
 def test_manifest_unknown_metal(tmp_path):
@@ -129,3 +132,12 @@ def test_manifest_metal_honoured(tmp_path):
     b.build_from_manifest(str(path))
     mat = rt.meditMaterials[0]
     assert mat.props["texmap_diffuse_multiplier"] == 30.0
+
+
+def test_gemstone_tint_deepens_fog_colour():
+    b, rt = mock_pymxs.install()
+    plain = b.build_material(MAPS, "S", "gemstone").props["refraction_fogColor"].as_unit()
+    b, rt = mock_pymxs.install()
+    tinted = b.build_material(MAPS, "S", "gemstone",
+                              tint=(0.8, 0.5, 1.0)).props["refraction_fogColor"].as_unit()
+    assert tinted[1] < plain[1] - 0.3 and tinted[2] == pytest.approx(plain[2], abs=0.01)

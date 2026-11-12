@@ -226,10 +226,16 @@ class SceneReader:
         return out
 
     def _bitmap_gamma_space(self, tex) -> ColorSpace:
-        """Read the gamma the bitmap was opened with (openBitMap(path, gamma=...))."""
+        """Colour space of a Bitmaptexture's loaded bitmap: its colorSpace under OCIO
+        (where gamma always reads 2.2), else the gamma it was opened with."""
         g = P.BITMAP_GAMMA
         try:
             bm = self.rt.getProperty(tex, g["bitmap_prop"]) if self.rt.isProperty(tex, g["bitmap_prop"]) else None
+            if bm is not None and P.ocio_data_space(self.rt):
+                kind = P.ocio_space_kind(self.rt.getProperty(bm, P.BITMAP_COLORSPACE_PROP))
+                self.log.used[("Bitmaptexture", "color_space")] = "bitmap.colorSpace"
+                self.log.missing.discard(("Bitmaptexture", "color_space"))
+                return {"linear": ColorSpace.LINEAR, "srgb": ColorSpace.SRGB}.get(kind, ColorSpace.UNKNOWN)
             if bm is None or not self.rt.isProperty(bm, g["gamma_prop"]):
                 return ColorSpace.UNKNOWN
             gamma = float(self.rt.getProperty(bm, g["gamma_prop"]))

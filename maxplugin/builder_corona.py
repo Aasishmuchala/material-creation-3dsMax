@@ -135,8 +135,11 @@ def _wire_metal(mat, maps, recipe, metal, tex):
 
 
 def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
-                   uvw_randomizer=False):
-    """maps: dict map_name -> file path. Returns the CoronaPhysicalMtl."""
+                   uvw_randomizer=False, tint=None):
+    """maps: dict map_name -> file path. Returns the CoronaPhysicalMtl.
+    tint: optional transmittance (linear RGB, one recipe thickness) for
+    refractive classes, from the photo (manifest "transmission_tint"), added
+    to the absorption exactly as the V-Ray builder adds it to the fog."""
     recipe = get_recipe(mclass)
     metal = metal or recipe.get("metal")
     if metal and metal not in matphys.METALS:
@@ -188,6 +191,12 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
             # transmittance of one thickness_mm pane (same as V-Ray)
             sigma = matphys.sigma_from_transmittance(refr["fog_color"],
                                                      thickness)
+        if tint:
+            # the photo's body colour (amethyst, green bottle glass): without
+            # it a coloured gem built for Corona rendered colourless
+            extra = matphys.sigma_from_transmittance(tuple(tint), thickness)
+            sigma = tuple(a + b for a, b in zip(sigma, extra))
+            _vb._log("  transmission tint from the photo: %s" % (tuple(tint),))
         colour, dist = matphys.to_corona_absorption(sigma, thickness,
                                                     mm_per_unit)
         _set(mat, "absorption_color", _vb._color(colour), "absorption colour")
@@ -195,6 +204,12 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
              "absorption distance (scene units)")
         if refr.get("glossiness") is not None:
             _vb._log("  frosted: Corona refraction shares base roughness")
+
+    # --- see-through weave (sheer curtains): straight through the gaps ---
+    see = recipe.get("see_through")
+    if see:
+        _set(mat, "refraction_amount", float(see), "see-through weave")
+        _set(mat, "thin_mode", True, "thin mode: no bending")
 
     # --- opacity (foliage): cutout = binary clip, fast ---
     if recipe.get("opacity") and "opacity" in maps:
@@ -231,7 +246,12 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
     sheen = recipe.get("sheen")
     if sheen:
         _set(mat, "sheen_amount", 1.0, "sheen amount")
-        _set(mat, "sheen_color", _vb._color(sheen["color"]), "sheen colour")
+        sheen_rgb = sheen["color"]
+        if sheen.get("from_albedo") and "albedo" in maps:
+            mean = _vb._albedo_mean(maps["albedo"])
+            if mean:
+                sheen_rgb = _vb.sheen_from_albedo(mean, sheen["from_albedo"], sheen.get("desat", 0.5))
+        _set(mat, "sheen_color", _vb._color(sheen_rgb), "sheen colour")
         _set(mat, "sheen_roughness", 1.0 - sheen["glossiness"],
              "sheen roughness")
     coat = recipe.get("coat")

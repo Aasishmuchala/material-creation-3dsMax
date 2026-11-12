@@ -78,15 +78,93 @@ class FixApplier:
             if used:
                 return FixResult(True, f"{t.node_class}.{used} = {v!r}")
         if t.node_class == "Bitmaptexture" and t.path and hasattr(self.rt, "openBitMap"):
-            # MatForge-verified path: reopen the bitmap with an explicit gamma.
             try:
-                bm = (self.rt.openBitMap(t.path, gamma=1.0) if fx.value == "linear"
-                      else self.rt.openBitMap(t.path))       # inherit default input gamma (sRGB)
-                self.rt.setProperty(t.handle, P.BITMAP_GAMMA["bitmap_prop"], bm)
-                return FixResult(True, "Bitmap reopened with gamma " + ("1.0" if fx.value == "linear" else "default"))
+                return self._reopen_bitmap(t, linear=fx.value == "linear")
             except Exception as exc:
                 return FixResult(False, f"openBitMap failed: {exc!r}")
         return FixResult(False, f"Don't know how to set colour space on {t.node_class} — fix manually")
+
+    def _bitmap_gamma(self, tex):
+        """What a Bitmaptexture's bitmap decodes as: its colorSpace name under OCIO,
+        else its gamma (float); None when unreadable."""
+        try:
+            bm = self.rt.getProperty(tex, P.BITMAP_GAMMA["bitmap_prop"])
+            if bm is None:
+                return None
+            if P.ocio_data_space(self.rt):
+                return str(self.rt.getProperty(bm, P.BITMAP_COLORSPACE_PROP))
+            return float(self.rt.getProperty(bm, P.BITMAP_GAMMA["gamma_prop"]))
+        except Exception:
+            return None
+
+    def _decodes_linear(self, state) -> Optional[bool]:
+        if state is None:
+            return None
+        if isinstance(state, str):
+            kind = P.ocio_space_kind(state)
+            return None if kind is None else kind == "linear"
+        G = P.BITMAP_GAMMA
+        if state <= G["linear_max"]:
+            return True
+        if state >= G["srgb_min"]:
+            return False
+        return None
+
+    def _same_file_users(self, t: TextureRef) -> list:
+        """Other Bitmaptexture nodes loading the same file, with their current gamma."""
+        try:
+            nodes = list(self.rt.getClassInstances(self.rt.Bitmaptexture))
+        except Exception:
+            return []
+        def norm(p):                     # Windows paths, compared the same on any OS
+            return str(p).replace("\\", "/").lower()
+        key = norm(t.path)
+        out = []
+        for n in nodes:
+            try:
+                same = norm(self.rt.getProperty(n, "filename")) == key
+            except Exception:
+                continue
+            if same and n != t.handle:
+                out.append((n, self._bitmap_gamma(n)))
+        return out
+
+    def _reopen_bitmap(self, t: TextureRef, linear: bool) -> FixResult:
+        """Reload the image at gamma 1.0 (linear) or the default input gamma (sRGB).
+
+        3ds Max caches bitmaps per file: openBitMap(path, gamma=1.0) on a file that is
+        already loaded returns the cached copy at its old gamma (verified on Max 2026.2).
+        Detaching the bitmap and flushing the cache first makes the reload take. The
+        cache keeps one copy per file, so other maps using the same file change too.
+        """
+        G = P.BITMAP_GAMMA
+        others = self._same_file_users(t)
+        self.rt.setProperty(t.handle, G["bitmap_prop"], None)
+        if hasattr(self.rt, "freeSceneBitmaps"):
+            self.rt.freeSceneBitmaps()
+        if hasattr(self.rt, "gc"):
+            self.rt.gc(light=True)
+        data_cs = P.ocio_data_space(self.rt)
+        if linear and data_cs:       # OCIO ignores gamma: open in the data colour space
+            bm = self.rt.openBitMap(t.path, colorSpace=data_cs)
+        elif linear:
+            bm = self.rt.openBitMap(t.path, gamma=1.0)
+        else:                        # input rules / default gamma decode sRGB
+            bm = self.rt.openBitMap(t.path)
+        self.rt.setProperty(t.handle, G["bitmap_prop"], bm)
+        got = self._bitmap_gamma(t.handle)
+        if self._decodes_linear(got) is not linear:
+            shown = "unknown" if got is None else (got if isinstance(got, str) else f"gamma {got:.2f}")
+            return FixResult(False, f"3ds Max kept this file as {shown}: another map outside the scene "
+                                    "(e.g. a Material Editor slot) still holds it — fix manually")
+        if data_cs:
+            msg = "Bitmap reloaded as " + (data_cs if linear else "sRGB (colour-space rules)")
+        else:
+            msg = "Bitmap reloaded with gamma " + ("1.0" if linear else "default")
+        changed = [str(getattr(n, "name", n)) for n, before in others if self._bitmap_gamma(n) != before]
+        if changed:
+            msg += f"; {len(changed)} other map(s) using the same file changed too: {', '.join(changed)}"
+        return FixResult(True, msg)
 
     def _fix_set_param(self, fx, mat, f) -> FixResult:
         names = P.PARAMS.get(mat.material_class, {}).get(fx.target)

@@ -28,3 +28,10 @@ dist/
 
 # local Qt dev env for offscreen UI screenshots (not part of the product)
 .venv-qt/
+
+# realism lab outputs (references, maps, renders)
+tools/realism_lab/out/
+
+# benchmark and apartment render outputs, and the large backdrop photos
+tools/apartment/out/
+tools/apartment/assets/

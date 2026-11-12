@@ -103,3 +103,121 @@ def test_bitmaptexture_gamma_path_matforge_style():
     assert r.ok and bad._props["bitmap"]._props["gamma"] == 1.0
     again = SceneReader(rt).materials()[0].textures_for(SlotRole.ROUGHNESS)[0]
     assert again.color_space == ColorSpace.LINEAR
+
+
+class CachingRT(FakeRT):
+    """Max 2026 behaviour: openBitMap on a loaded file returns the cached copy at its old gamma."""
+
+    def __init__(self, *a, pinned=False, **kw):
+        super().__init__(*a, **kw)
+        self._cache, self._pinned, self.users = {}, pinned, []
+        self.Bitmaptexture = "Bitmaptexture"
+
+    def openBitMap(self, path, gamma=None):
+        if path not in self._cache:
+            self._cache[path] = super().openBitMap(path, gamma)
+        return self._cache[path]
+
+    def freeSceneBitmaps(self):
+        if not self._pinned:      # pinned = still held by a map outside the scene
+            self._cache.clear()
+
+    def gc(self, light=False):
+        pass
+
+    def getClassInstances(self, cls):
+        return list(self.users)
+
+
+def _cached_scene(pinned=False, share=False):
+    rt = CachingRT(pinned=pinned)
+    bad = Node("Bitmaptexture", "r", filename="C:/t/oak_Roughness.png", bitmap=rt.openBitMap("C:/t/oak_Roughness.png"))
+    rt.users = [bad]
+    if share:
+        other = Node("Bitmaptexture", "r2", filename=r"C:\T\oak_Roughness.png", bitmap=bad._props["bitmap"])
+        rt.users.append(other)
+    m = Node("VRayMtl", "Oak", diffuse=Color(140, 110, 80), brdf_useRoughness=True, brdf_type=3,
+             texmap_reflectionGlossiness=bad)
+    rt.sceneMaterials = [m]
+    mats = SceneReader(rt).materials()
+    f = [x for x in inspect(mats, InspectorOptions(check_pixels=False)) if x.rule_id == "R001"][0]
+    return rt, bad, mats, f
+
+
+def test_gamma_fix_bypasses_bitmap_cache():
+    rt, bad, mats, f = _cached_scene()
+    r = FixApplier(rt).apply(f, mats[0])
+    assert r.ok, r.message
+    assert bad._props["bitmap"]._props["gamma"] == 1.0
+    assert SceneReader(rt).materials()[0].textures_for(SlotRole.ROUGHNESS)[0].color_space == ColorSpace.LINEAR
+
+
+def test_gamma_fix_reports_failure_when_max_keeps_the_cached_copy():
+    rt, bad, mats, f = _cached_scene(pinned=True)
+    r = FixApplier(rt).apply(f, mats[0])
+    assert not r.ok and "fix manually" in r.message
+    assert bad._props["bitmap"]._props["gamma"] == 2.2      # unchanged, never claimed fixed
+
+
+def test_gamma_fix_names_other_maps_sharing_the_file():
+    rt, bad, mats, f = _cached_scene(share=True)
+    rt.users[1]._props["bitmap"] = rt._cache["C:/t/oak_Roughness.png"]
+    real_open = rt.openBitMap
+
+    def open_and_share(path, gamma=None):    # Max hands every user of the file the new copy
+        bm = real_open(path, gamma)
+        rt.users[1]._props["bitmap"] = bm
+        return bm
+    rt.openBitMap = open_and_share
+    r = FixApplier(rt).apply(f, mats[0])
+    assert r.ok and "1 other map(s)" in r.message and "r2" in r.message
+
+
+class OcioRT(CachingRT):
+    """3ds Max 2024+ OCIO: gamma reads 2.2 on every bitmap and is ignored; the
+    bitmap's colorSpace is what decodes (PNG input rule -> sRGB)."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        import types
+        self.ColorPipelineMgr = types.SimpleNamespace(Mode="OCIO_Default", DataColorSpace="raw")
+
+    def openBitMap(self, path, gamma=None, colorSpace=None):
+        if path not in self._cache:
+            self._cache[path] = Node("Bitmap", gamma=2.2, colorSpace=colorSpace or "sRGB",
+                                     filename=path)
+        return self._cache[path]
+
+
+def _ocio_scene(data_cs="sRGB"):
+    rt = OcioRT()
+    bad = Node("Bitmaptexture", "r", filename="C:/t/oak_Roughness.png",
+               bitmap=rt.openBitMap("C:/t/oak_Roughness.png",
+                                    colorSpace=None if data_cs == "sRGB" else data_cs))
+    rt.users = [bad]
+    m = Node("VRayMtl", "Oak", diffuse=Color(140, 110, 80), brdf_useRoughness=True, brdf_type=3,
+             texmap_reflectionGlossiness=bad)
+    rt.sceneMaterials = [m]
+    return rt, bad
+
+
+def test_ocio_colour_space_read_from_bitmap_not_gamma():
+    rt, _ = _ocio_scene("raw")                 # gamma still reads 2.2 here
+    rough = SceneReader(rt).materials()[0].textures_for(SlotRole.ROUGHNESS)[0]
+    assert rough.color_space == ColorSpace.LINEAR
+    rt, _ = _ocio_scene("sRGB")
+    reader = SceneReader(rt)
+    mats = reader.materials()
+    assert mats[0].textures_for(SlotRole.ROUGHNESS)[0].color_space == ColorSpace.SRGB
+    assert reader.log.as_dict()["used"]["Bitmaptexture.color_space"] == "bitmap.colorSpace"
+
+
+def test_ocio_fix_reopens_in_data_colour_space():
+    rt, bad = _ocio_scene("sRGB")
+    mats = SceneReader(rt).materials()
+    f = [x for x in inspect(mats, InspectorOptions(check_pixels=False)) if x.rule_id == "R001"][0]
+    r = FixApplier(rt).apply(f, mats[0])
+    assert r.ok, r.message
+    assert bad._props["bitmap"]._props["colorSpace"] == "raw"
+    again = SceneReader(rt).materials()[0].textures_for(SlotRole.ROUGHNESS)[0]
+    assert again.color_space == ColorSpace.LINEAR

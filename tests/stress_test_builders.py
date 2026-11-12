@@ -272,8 +272,11 @@ def test_builders_glass_transmittance_unit_invariant(mclass, unit):
         b, bc, rt = _install(system_unit=unit)
         pv = b.build_material({}, "G", mclass).props
         pc = bc.build_material({}, "G", mclass).props
+    # V-Ray 7.30 fog law, measured: with refraction_fogUnitsScale_on,
+    # T(d) = fog_color ** (d_cm / refraction_fogDepth), in any scene units
+    assert pv["refraction_fogUnitsScale_on"] is True
     fog = pv["refraction_fogColor"].as_unit()
-    t_v = [f ** (pv["refraction_fogMult"] * depth) for f in fog]
+    t_v = [f ** ((d / 10.0) / pv["refraction_fogDepth"]) for f in fog]
     col = pc["volumetricAbsorptionColor"].as_unit()
     t_c = [c ** (depth / pc["volumetricAbsorptionDistance"]) for c in col]
     for a, x, y in zip(want, t_v, t_c):
@@ -294,7 +297,8 @@ def test_vray_gemstone_fog_unit_invariant():
             pv = b.build_material({}, "G", "gemstone").props
             pc = bc.build_material({}, "G", "gemstone").props
         depth = d / mmpu
-        t_v = [f ** (pv["refraction_fogMult"] * depth)
+        assert pv["refraction_fogUnitsScale_on"] is True
+        t_v = [f ** ((d / 10.0) / pv["refraction_fogDepth"])
                for f in pv["refraction_fogColor"].as_unit()]
         t_c = [c ** (depth / pc["volumetricAbsorptionDistance"])
                for c in pc["volumetricAbsorptionColor"].as_unit()]

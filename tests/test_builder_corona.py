@@ -94,6 +94,21 @@ def test_gemstone_keeps_recipe_fog_as_absorption():
     assert abs(p["volumetricAbsorptionDistance"] - 10.0) < 1e-9
 
 
+def test_gemstone_tint_deepens_absorption_colour():
+    """The photo's transmission tint reaches Corona too: an amethyst built for
+    Corona rendered colourless while the V-Ray build of the same manifest
+    was violet. Same maths as V-Ray: the tint's absorption over the recipe
+    thickness adds to the recipe's own."""
+    bc, b, rt = _install()
+    tint = (0.859, 0.3945, 1.0)
+    p = bc.build_material(MAPS, "Gem", "gemstone", tint=tint).props
+    fog = RECIPES["gemstone"]["refraction"]["fog_color"]
+    assert _close(p["volumetricAbsorptionColor"].as_unit(),
+                  tuple(f * t for f, t in zip(fog, tint)), 1e-6)
+    assert abs(p["volumetricAbsorptionDistance"] - 10.0) < 1e-9
+    assert any("transmission tint" in line for line in b.LOG)
+
+
 def test_water_uses_matphys_ior():
     bc, b, rt = _install()
     p = bc.build_material(MAPS, "Pool", "water").props
@@ -181,7 +196,7 @@ def test_dielectric_has_no_metalness_mode():
     bc, b, rt = _install()
     p = bc.build_material(MAPS, "Powder", "metal_painted").props
     assert "metalnessMode" not in p
-    assert p["clearcoatAmount"] == 0.35
+    assert p["clearcoatAmount"] == RECIPES["metal_painted"]["coat"]["amount"]
 
 
 # ---------- SSS ----------
@@ -190,8 +205,9 @@ def test_marble_sss_mm_scene():
     bc, b, rt = _install()
     p = bc.build_material(MAPS, "Carrara", "marble").props
     assert p["volumetricMode"] == 1
-    assert abs(p["sssRadius"] - 2.0) < 1e-9
-    assert p["sssAmount"] == 0.15
+    tr = RECIPES["marble"]["translucency"]
+    assert abs(p["sssRadius"] - tr["sss_radius_mm"]) < 1e-9   # mm scene
+    assert p["sssAmount"] == tr["amount"]
     assert isinstance(p["sssScatterColor"], mock_pymxs.MockColor)
     assert "refractionAmount" not in p
 
@@ -199,8 +215,9 @@ def test_marble_sss_mm_scene():
 def test_wax_sss_radius_converts_units():
     bc, b, rt = _install(system_unit="cm")
     p = bc.build_material(MAPS, "Candle", "wax").props
-    assert abs(p["sssRadius"] - 0.5) < 1e-9
-    assert p["sssAmount"] == 0.50
+    tr = RECIPES["wax"]["translucency"]
+    assert abs(p["sssRadius"] - tr["sss_radius_mm"] / 10.0) < 1e-9  # cm scene
+    assert p["sssAmount"] == tr["amount"]
 
 
 # ---------- displacement ----------
@@ -276,11 +293,13 @@ def test_fabric_sheen_and_leather_clearcoat():
     fab = bc.build_material(MAPS, "Linen", "fabric").props
     assert fab["sheenAmount"] == 1.0
     assert isinstance(fab["sheenColor"], mock_pymxs.MockColor)
-    assert abs(fab["sheenRoughness"] - (1 - 0.55)) < 1e-9
+    assert abs(fab["sheenRoughness"]
+               - (1 - RECIPES["fabric"]["sheen"]["glossiness"])) < 1e-9
     bc, b, rt = _install()
     lea = bc.build_material(MAPS, "Hide", "leather").props
-    assert lea["clearcoatAmount"] == 0.15
-    assert abs(lea["clearcoatRoughness"] - (1 - 0.80)) < 1e-9
+    coat = RECIPES["leather"]["coat"]
+    assert lea["clearcoatAmount"] == coat["amount"]
+    assert abs(lea["clearcoatRoughness"] - (1 - coat["glossiness"])) < 1e-9
     assert lea["clearcoatIor"] == 1.5
     assert "sheenColor" in lea
 
