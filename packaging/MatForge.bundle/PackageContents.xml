@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Autodesk application package. Spec: 3ds Max Developer Help, "Packaging Plug-ins" /
+     "PackageContents.xml format". Build with `python tools/build_matforge_bundle.py`, then copy
+     dist/MatForge.bundle to %ProgramData%\Autodesk\ApplicationPlugins\ (or set
+     ADSK_APPLICATION_PLUGINS for testing). Pattern copied from the Material Inspector bundle. -->
+<ApplicationPackage
+    SchemaVersion="1.0"
+    AutodeskProduct="3ds Max"
+    ProductType="Application"
+    Name="MatForge"
+    Description="Reference image to wired V-Ray / Corona material"
+    AppVersion="0.1.0"
+    Author="Measured Light"
+    ProductCode="{AB8FDB3C-8A9B-4952-AB11-4C2CB55F4084}"
+    UpgradeCode="{09D5BF00-F63F-4AB2-BA6D-34C63546A4EB}">
+  <CompanyDetails Name="Measured Light" />
+  <Components Description="post-start-up scripts parts">
+    <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2027" />
+    <ComponentEntry AppName="MatForgeStartup" Version="0.1.0"
+                    ModuleName="./Contents/scripts/matforge_startup.ms" />
+  </Components>
+</ApplicationPackage>

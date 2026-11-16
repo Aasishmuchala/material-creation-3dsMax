@@ -15,36 +15,83 @@ The schemas mirror real V-Ray 6/7 property names (the FIRST candidate in each
 builder list). If the builder's primary candidate ever drifts from a real
 name, these tests surface it as a logged MISS.
 """
+import re
+import types
 
 # Valid property names per node class (isProperty answers from these).
 VRAYMTL_PROPS = frozenset({
     "diffuse", "texmap_diffuse",
     "reflection", "reflection_fresnel", "brdf_useRoughness",
     "texmap_reflectionGlossiness", "reflection_glossiness",
+    "texmap_reflectionGlossiness_multiplier",
     "reflection_metalness", "texmap_metalness", "anisotropy",
     "reflection_lockIOR",
     "refraction_ior", "refraction", "refraction_fogColor",
     "refraction_fogMult", "refraction_affectShadows", "refraction_thinWalled",
+    "refraction_fogDepth", "refraction_fogUnitsScale_on",  # V-Ray 5.1+ fog in cm
     "refraction_glossiness",  # frosted/etched glass (rough refraction)
     "texmap_opacity", "opacity_mode", "texmap_bump", "texmap_bump_multiplier",
     "texmap_displacement", "texmap_displacement_multiplier",
     "sheen_color", "sheen_glossiness", "coat_amount", "coat_glossiness",
-    "translucency_on", "translucency_color",
+    "translucency_on", "translucency_color", "translucency_amount",
+    "texmap_translucent", "texmap_sheen",  # SSS colour map, fibre sheen map
     "texmap_self_illumination", "selfIllumination",  # emissive / LED
     "selfIllumination_multiplier",
+    "compensate_camera_exposure", "selfIllumination_gi",  # emissive under a physical camera
+    "texmap_diffuse_multiplier",
     "name",  # V-Ray 7: _on, not bare
 })
-TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "name"})
+# First candidate of every CORONA_MTL entry (maxplugin/corona_props.py).
+CORONA_MTL_PROPS = frozenset({
+    "baseColor", "baseTexmap", "baseTexmapAmount", "roughnessMode",
+    "baseRoughness", "baseRoughnessTexmap", "baseIor", "metalnessMode",
+    "metalnessTexmap", "useComplexIor", "complexIorN", "complexIorK",
+    "edgeColor", "baseAnisotropy", "refractionAmount", "useThinMode",
+    "volumetricAbsorptionColor", "volumetricAbsorptionDistance",
+    "volumetricMode", "sssAmount", "sssRadius", "sssScatterColor",
+    "translucencyFraction", "translucencyColor", "clearcoatAmount",
+    "clearcoatRoughness", "clearcoatIor", "sheenAmount", "sheenColor",
+    "sheenRoughness", "opacityTexmap", "opacityCutout", "baseBumpTexmap",
+    "baseBumpMapAmount", "displacementTexmap", "displacementMinimum",
+    "displacementMaximum", "selfIllumLevel", "selfIllumColor",
+    "selfIllumTexmap",
+    "name",
+})
+CORONA_NORMAL_PROPS = frozenset({"normalMap", "flipGreen", "addGamma", "name"})
+CORONA_BITMAP_PROPS = frozenset({"filename", "gamma", "uvwRandomizer", "name"})
+CORONA_RND_PROPS = frozenset({"name"})
+TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "mult_by_front_diffuse", "name"})
+NOISE_PROPS = frozenset({"type", "size", "color1", "color2", "name"})
+COLORCORRECTION_PROPS = frozenset({"map", "brightness", "saturation", "hueShift", "name"})
+FALLOFF_PROPS = frozenset({"type", "map1", "map2", "color1", "color2", "ior", "name"})
+MULTI_PROPS = frozenset({"materialList", "name"})
 NORMALMAP_PROPS = frozenset({"normal_map", "name"})
 BITMAP_PROPS = frozenset({"filename", "fileName", "bitmap", "name"})
-DISP_PROPS = frozenset({"type", "amount", "texmap", "name"})
+DISP_PROPS = frozenset({"type", "amount", "shift", "texmap", "keepContinuity",
+                        "name"})
+VRAYBITMAP_PROPS = frozenset({"HDRIMapName", "color_space", "rgbColorSpace",
+                              "mapSource", "name"})
+UVW_RND_PROPS = frozenset({"mode_by_uv_tile", "mode_by_node_handle",
+                           "tile_blend", "variance_u_min", "variance_u_max",
+                           "variance_v_min", "variance_v_max",
+                           "variance_rot_min", "variance_rot_max", "name"})
 
 _SCHEMAS = {
+    "VRayBitmap": VRAYBITMAP_PROPS,
+    "VRayUVWRandomizer": UVW_RND_PROPS,
     "VRayMtl": VRAYMTL_PROPS,
     "VRay2SidedMtl": TWOSIDED_PROPS,
+    "Noise": NOISE_PROPS,
+    "ColorCorrection": COLORCORRECTION_PROPS,
+    "Falloff": FALLOFF_PROPS,
+    "MultiMaterial": MULTI_PROPS,
     "VRayNormalMap": NORMALMAP_PROPS,
     "Bitmaptexture": BITMAP_PROPS,
     "VRayDisplacementMod": DISP_PROPS,
+    "CoronaPhysicalMtl": CORONA_MTL_PROPS,
+    "CoronaNormal": CORONA_NORMAL_PROPS,
+    "CoronaBitmap": CORONA_BITMAP_PROPS,
+    "CoronaUvwRandomizer": CORONA_RND_PROPS,
 }
 
 
@@ -77,12 +124,14 @@ class MockColor:
 
 
 class MockBitmap:
-    def __init__(self, path, gamma=None):
+    def __init__(self, path, gamma=None, colorSpace=None):
         self.path = path
         self.gamma = gamma
+        self.colorSpace = colorSpace
 
     def __repr__(self):
-        return "Bitmap(%r, gamma=%r)" % (self.path, self.gamma)
+        return "Bitmap(%r, gamma=%r, colorSpace=%r)" % (self.path, self.gamma,
+                                                        self.colorSpace)
 
 
 class MockNode:
@@ -185,8 +234,14 @@ class MockUndo:
 
 class MockRuntime:
     def __init__(self, selection=None, active_slot=1, drop=frozenset(),
-                 system_unit="mm"):
+                 system_unit="mm", renderer="vray",
+                 classes=("VRayMtl", "CoronaPhysicalMtl"), gamma=True):
         self._drop = frozenset(drop)
+        self._classes = tuple(classes)
+        self.gammaMgr = types.SimpleNamespace(enable=gamma)
+        self.renderers = types.SimpleNamespace(current=MockNode(
+            {"vray": "V_Ray_7_hotfix_3", "corona": "CoronaRenderer",
+             None: "Default_Scanline_Renderer"}[renderer], frozenset()))
         self.meditMaterials = MockMeditArray()
         self.medit = MockMedit(active_slot)
         self.MatEditor = MockMatEditor()
@@ -206,14 +261,60 @@ class MockRuntime:
     def VRay2SidedMtl(self):
         return self._node("VRay2SidedMtl")
 
+    def Noise(self):
+        return self._node("Noise")
+
+    def ColorCorrection(self):
+        return self._node("ColorCorrection")
+
+    def Falloff(self):
+        return self._node("Falloff")
+
+    def MultiMaterial(self, numsubs=10):
+        mm = self._node("MultiMaterial")
+        mm.props["subs"] = [None] * int(numsubs)
+        return mm
+
+    def setSubMtl(self, mm, index, mat):
+        mm.props["subs"][index - 1] = mat
+
+    def copy(self, node):
+        dup = MockNode(node.cls, node.schema)
+        dup.props.update(node.props)
+        return dup
+
     def VRayNormalMap(self):
         return self._node("VRayNormalMap")
 
     def Bitmaptexture(self):
         return self._node("Bitmaptexture")
 
+    def VRayBitmap(self):
+        return self._node("VRayBitmap")
+
+    def VRayUVWRandomizer(self):
+        return self._node("VRayUVWRandomizer")
+
     def VRayDisplacementMod(self):
         return self._node("VRayDisplacementMod")
+
+    def CoronaPhysicalMtl(self):
+        return self._node("CoronaPhysicalMtl")
+
+    def CoronaNormal(self):
+        return self._node("CoronaNormal")
+
+    def CoronaBitmap(self):
+        return self._node("CoronaBitmap")
+
+    def CoronaUvwRandomizer(self):
+        return self._node("CoronaUvwRandomizer")
+
+    def execute(self, expr):
+        m = re.match(r"^\((\w+) != undefined\)$", str(expr).strip())
+        if m:
+            return m.group(1) in self._classes
+        return None
 
     # --- runtime helpers ---
     def Name(self, s):
@@ -228,8 +329,8 @@ class MockRuntime:
     def isProperty(self, obj, name):
         return hasattr(obj, "has_prop") and obj.has_prop(name)
 
-    def openBitMap(self, path, gamma=None):
-        return MockBitmap(path, gamma)
+    def openBitMap(self, path, gamma=None, colorSpace=None):
+        return MockBitmap(path, gamma, colorSpace)
 
     def addModifier(self, node, mod):
         node.modifiers.append(mod)
@@ -251,7 +352,9 @@ def make_scene_nodes(n):
     return nodes
 
 
-def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
+def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm",
+            renderer="vray", classes=("VRayMtl", "CoronaPhysicalMtl"),
+            gamma=True):
     """Inject a fresh fake `pymxs` into sys.modules and (re)load builder.
 
     Returns (builder_module, runtime). Call once per test for isolation.
@@ -261,7 +364,8 @@ def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
     import types
 
     rt = MockRuntime(selection=selection, active_slot=active_slot, drop=drop,
-                     system_unit=system_unit)
+                     system_unit=system_unit, renderer=renderer,
+                     classes=classes, gamma=gamma)
     fake = types.ModuleType("pymxs")
     fake.runtime = rt
     fake.undo = MockUndo  # pymxs.undo(True, label) -> context manager
@@ -269,4 +373,10 @@ def install(selection=None, active_slot=1, drop=frozenset(), system_unit="mm"):
 
     import maxplugin.builder as builder
     importlib.reload(builder)
+    try:
+        import maxplugin.builder_corona as builder_corona
+    except ImportError:
+        builder_corona = None
+    if builder_corona is not None:
+        importlib.reload(builder_corona)
     return builder, rt

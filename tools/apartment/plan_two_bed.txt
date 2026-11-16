@@ -1,0 +1,46 @@
+# Source: Schematex floor-plan example "Two-Bedroom Apartment — 68 m²"
+#   https://schematex.js.org/examples/floorplan-two-bed-apartment  (Schematex is AGPL-3.0)
+# Used only as a dimensional reference for a 3D test model. Units: metres, origin top-left, y down.
+# Change from the source: the living-room window pier is 1.4 m (was 1.0) so a 55" TV fits it.
+floorplan "Two-Bedroom Apartment — 68 m²" unit m
+wall exterior thickness 0.35
+wall interior thickness 0.12
+room living  "Living Room"  at 0,0       size 5.2x4.2
+room kitchen "Kitchen"      right-of living size 3.0x4.2
+room hall    "Hallway"      below living  size 2.0x2.6
+room bed1    "Bedroom 1"    right-of hall size 3.2x2.6
+room bath    "Bathroom"     right-of bed1 size 2.0x2.6
+room bed2    "Bedroom 2"    below hall    size 3.4x3.0
+room closet  "WIC"          right-of bed2 size 1.8x3.0
+door hall west at 50% width 1.0 swing in
+opening between living hall at 50% width 1.4
+opening between living kitchen at 35% width 1.2
+door between hall bed1 at 50% hinge right
+door between bed1 bath at 30%
+door between hall bed2 at 25%
+door between bed2 closet at 50% type bifold
+window living north from start 0.4 width 1.8 id living-west
+window living north after living-west gap 1.4 width 1.2 id living-east
+window kitchen north at 50% width 1.5
+window kitchen east at 50% width 1.4 type sliding
+window bed1 south at 55% width 1.4
+window bed2 south at 50% width 1.6
+window bed2 west at 50% width 1.2
+furniture sofa          in living at 0.25,2.9
+furniture coffee-table  in living at 1.0,1.9
+furniture tv            in living at 1.2,0.15
+furniture armchair      in living at 3.9,2.8
+furniture plant         in living at 4.5,0.3
+furniture rug           in living at 0.9,1.5
+furniture counter       in kitchen at 0.15,0.15 size 2.6x0.6
+furniture kitchen-sink  in kitchen at 0.6,0.18
+furniture stove         in kitchen at 2.25,0.15
+furniture fridge        in kitchen at 2.15,3.3
+furniture dining-table  in kitchen at 0.5,1.7 size 1.5x0.9
+furniture bed-double    in bed1 at 0.9,0.35 size 1.5x2.0
+furniture wardrobe      in bed1 at 0.1,0.1 size 0.6x2.3
+furniture toilet        in bath at 0.2,0.15
+furniture sink          in bath at 1.3,0.15
+furniture shower        in bath at 1.0,1.55
+furniture bed-double    in bed2 at 0.9,0.5 size 1.6x2.0
+furniture wardrobe      in closet at 0.1,0.2 size 0.6x2.6

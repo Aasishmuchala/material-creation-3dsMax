@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Autodesk application package. Spec: 3ds Max Developer Help, "Packaging Plug-ins" /
+     "PackageContents.xml format". Install by copying MaterialInspector.bundle to
+     %ProgramData%\Autodesk\ApplicationPlugins\ (or set ADSK_APPLICATION_PLUGINS for testing). -->
+<ApplicationPackage
+    SchemaVersion="1.0"
+    AutodeskProduct="3ds Max"
+    ProductType="Application"
+    Name="Material Inspector"
+    Description="Checks and fixes V-Ray and Corona materials for physical plausibility"
+    AppVersion="0.1.0"
+    Author="Measured Light"
+    ProductCode="{6B1E3A2C-8F44-4C1B-9E1D-2D7F0A5C3B11}"
+    UpgradeCode="{0D9C5E77-3A6B-4E2F-8C40-7B1A9F2E6D54}">
+  <CompanyDetails Name="Measured Light" />
+  <Components Description="post-start-up scripts parts">
+    <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2025" SeriesMax="2027" />
+    <ComponentEntry AppName="MaterialInspectorStartup" Version="0.1.0"
+                    ModuleName="./Contents/scripts/material_inspector_startup.ms" />
+  </Components>
+</ApplicationPackage>

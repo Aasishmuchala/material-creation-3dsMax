@@ -11,7 +11,13 @@ import fal_client
 
 MAP_KEYS = {"basecolor": "albedo", "normal": "normal", "roughness": "roughness",
             "metalness": "metalness", "height": "height"}
-SM = r"C:\Users\aasis\matforge\sample_maps"
+try:
+    _ROOT = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _ROOT = os.environ.get("MATFORGE_ROOT", "")
+if not _ROOT or not os.path.isdir(_ROOT):
+    sys.exit("MatForge root not found: run from the repo or set MATFORGE_ROOT")
+SM = os.path.join(_ROOT, "sample_maps")
 
 JOBS = [
     ("fal_wood.jpg", "Wood4K", "wood_interior",
