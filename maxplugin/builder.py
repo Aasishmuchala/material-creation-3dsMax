@@ -183,6 +183,11 @@ def _material_uvw(mat):
         if not rt.isProperty(mat, rt.Name("texmap_diffuse")):
             return None
         tex = mat.texmap_diffuse
+        for _ in range(4):                  # through a nap falloff / colour correction
+            if tex is None or rt.isProperty(tex, rt.Name("mapSource")):
+                break
+            inner = next((n for n in ("map1", "map") if rt.isProperty(tex, rt.Name(n))), None)
+            tex = getattr(tex, inner) if inner else None
         if tex is None or not rt.isProperty(tex, rt.Name("mapSource")):
             return None
         return tex.mapSource
@@ -290,6 +295,38 @@ def _mottle_tex(rgb, amount, size_cm):
     return nz
 
 
+def nap_side_colour(mean_rgb, nap):
+    """The colour a pile turns at grazing view: the albedo's mean lifted
+    `gain` times (to at most `max_lum`) and a little desaturated."""
+    lum = 0.2126 * mean_rgb[0] + 0.7152 * mean_rgb[1] + 0.0722 * mean_rgb[2]
+    return sheen_from_albedo(mean_rgb, min(float(nap.get("max_lum", 0.6)), float(nap["gain"]) * lum),
+                             float(nap.get("desat", 0.25)))
+
+
+def _nap_falloff(albedo_tex, side_rgb, power=2):
+    """The albedo seen through a view falloff: itself face on, `side_rgb` at
+    grazing view, rising as (1 - cos)^power (Perpendicular / Parallel
+    falloffs nested `power` deep).
+
+    A pile is dark where you look down the fibres and light where you look
+    across them, whatever the light does; the sheen lobe alone only answers
+    light that grazes, and velvet under soft frontal light rendered as flat
+    felt. Linear (power 1) washed a seat seen at 25 degrees to 60 % of the
+    side colour; squared keeps the body colour and leaves a soft rim.
+    """
+    tex = albedo_tex
+    for _ in range(max(1, int(power))):
+        fo = rt.Falloff()
+        _set_first(fo, ["type"], 1, "nap falloff perpendicular/parallel")
+        _set_first(fo, ["map1"], albedo_tex, "nap front map")
+        if tex is albedo_tex:
+            _set_first(fo, ["color2"], _color(side_rgb), "nap side colour")
+        else:
+            _set_first(fo, ["map2"], tex, "nap side (nested)")
+        tex = fo
+    return tex
+
+
 def roughness_blend(forged, target, tol=0.015):
     """(map amount 0-1, scalar) that take a roughness map forged round
     `forged` to a mean of `target` through V-Ray's map-amount blend
@@ -376,6 +413,13 @@ def build_material(maps, name, mclass, metal=None, tint=None, anti_tile=True, al
             _set_first(cc, ["saturation"], float(acc.get("saturation", 0.0)), "albedo saturation")
             _set_first(cc, ["brightness"], float(acc.get("brightness", 0.0)), "albedo brightness")
             alb = cc
+        nap = recipe.get("nap")
+        if nap:
+            albedo_mean = albedo_mean or _albedo_mean(maps["albedo"])
+            if albedo_mean:
+                side = nap_side_colour(albedo_mean, nap)
+                alb = _nap_falloff(alb, side, nap.get("power", 2))
+                _log("  pile nap: lighter at grazing view %s" % (tuple(round(c, 3) for c in side),))
         _set_first(mat, ["texmap_diffuse"], alb, "albedo map slot")
     if f0_mode:
         # measured F0 as the swatch; albedo map kept at 30 % so scratches /
@@ -462,7 +506,7 @@ def build_material(maps, name, mclass, metal=None, tint=None, anti_tile=True, al
         if tint:
             # the photo's body colour (amethyst, green bottle glass) adds to
             # the material's own absorption over the same thickness
-            extra = matphys.sigma_from_transmittance(tuple(tint), thickness)
+            extra = matphys.sigma_from_transmittance(matphys.body_tint(tint), thickness)
             sigma = tuple(a + b for a, b in zip(sigma, extra))
             _log("  transmission tint from the photo: %s" % (tuple(tint),))
         _set_first(mat, ["refraction_ior", "refractionIOR"], r_ior,

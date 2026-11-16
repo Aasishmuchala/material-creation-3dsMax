@@ -79,6 +79,31 @@ def sigma_from_transmittance(transmittance_rgb, thickness_mm):
                  for t in transmittance_rgb)
 
 
+def body_tint(tint_rgb):
+    """A photo's body tint (transmittance of one recipe thickness, strongest
+    channel 1.0) made to hold up at any depth.
+
+    A photo gives the colour at one depth. Beer-Lambert then compounds it,
+    and two things a tint normalised to its strongest channel cannot know
+    went wrong in thick pieces: (1) nothing ever absorbs the strongest
+    channel, so a big amethyst glowed pure saturated blue instead of going
+    dark; (2) a body whose colour is the balance of two channels (purple:
+    red and blue; also cyan, yellow) drifts to whichever is a few percent
+    ahead in the photo, a difference that is mostly the photo's light. So a
+    coloured body also absorbs a little in its window (up to 15 % per
+    thickness for a fully saturated one, nothing for a clear one), and where
+    the second channel is within 15 % of the first while the third is well
+    below, the gap between the two is halved (geometric mean).
+    """
+    t = [min(max(float(c), _T_MIN), 1.0) for c in tint_rgb]
+    hi, lo = max(t), min(t)
+    mid_i = sorted(range(3), key=lambda i: t[i])[1]
+    if lo < 0.8 * hi and t[mid_i] >= 0.85 * hi:
+        t[mid_i] = math.sqrt(t[mid_i] * hi)
+    window = 1.0 - 0.15 * (1.0 - lo / hi)
+    return tuple(c * window for c in t)
+
+
 def transmittance(sigma_mm, thickness_mm):
     """Beer-Lambert transmittance exp(-sigma d) per channel."""
     return tuple(math.exp(-s * thickness_mm) for s in sigma_mm)

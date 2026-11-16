@@ -500,7 +500,9 @@ def test_build_from_manifest_tints_both_renderers(tmp_path):
         got[m["renderer"]] = p[key].as_unit()
     assert set(got) == {"vray", "corona"}
     for colour in got.values():
-        assert colour[1] < 0.45 and colour[2] > 0.99      # violet, not near-white
+        # violet, not near-white; and blue is absorbed a little too, so a
+        # thick stone goes dark instead of glowing pure blue
+        assert colour[1] < 0.45 and 0.85 < colour[2] < 0.97 and colour[0] > 0.8
 
 
 def _run_cli(tmp_path, mclass, *flags):

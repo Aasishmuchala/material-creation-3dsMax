@@ -345,7 +345,11 @@ def test_stripe_fabric_keeps_both_colours_through_generate_maps(monkeypatch, tmp
     warns = []
     fabric = _albedo_forged(monkeypatch, p, tmp_path / "f", "fabric", warns)
     wood = _albedo_forged(monkeypatch, p, tmp_path / "w", "wood_interior")
-    assert np.abs(fabric - wood).max() * 255 < 1.0
+    # (not pixel for pixel: the fabric class also cuts the photo where its
+    # weave runs on into itself, which moves the stripes a little)
+    for q in (10, 90):                      # the red and the cream, per channel
+        there, here = (np.percentile(a, q, axis=(0, 1)) for a in (wood, fabric))
+        assert np.abs(here - there).max() * 255 < 3.0
     assert any("flattening skipped" in w for w in warns)
 
 

@@ -162,3 +162,67 @@ def test_a_regular_weave_is_cropped_to_whole_repeats():
     (same,), found = M.snap_to_lattice(grain)
     assert found == (None, None) and same is grain
 
+
+def test_a_drifting_lattice_is_cut_where_it_runs_on():
+    """Rows of loops whose spacing drifts down the photo have no one
+    frequency to make whole; the cut is found by matching the start strip
+    further on, and the wrap ends up in step (no wide gap row)."""
+    n = 512
+    yy, xx = np.mgrid[0:n, 0:n].astype(np.float32)
+    phase = 2.0 * np.pi * (yy / 13.3 + 0.9 * (yy / n) ** 2)             # the pitch tightens downward
+    rng = np.random.default_rng(8)
+    loops = _grey((0.4 + 0.12 * np.cos(phase) + rng.normal(0.0, 0.02, (n, n))).astype(np.float32))
+    (cut,), kept = M.snap_to_lattice(loops)
+    assert kept[0] is not None and kept[0] < n and kept[1] is None
+    prof = lambda im: im[..., 0].mean(axis=1)
+    step = lambda p: abs(p[0] - p[-1]) / np.abs(np.diff(p)).mean()
+    assert step(prof(cut)) < 2.0 < step(prof(loops))
+
+
+def test_photo_border_is_trimmed_but_not_a_lighting_ramp():
+    """A glow along one edge and an off-tone last row are the photo's border,
+    not the material: both go. A steady ramp of light across the frame is
+    left for the de-lighting (only the fixed 1/256 goes)."""
+    n = 512
+    rng = np.random.default_rng(5)
+    base = (0.45 + rng.normal(0.0, 0.03, (n, n))).astype(np.float32)
+    glow = base.copy()
+    glow[:, -10:] += np.linspace(0.0, 0.06, 10, dtype=np.float32)[None, :]
+    glow[-1, :] += 0.05
+    _, (top, bottom, left, right) = M.trim_photo_edges(_grey(glow))
+    assert right >= 8 and (top, left) == (2, 2) and bottom == 2      # the last row goes with the fixed cut
+    ramp = base + np.linspace(-0.08, 0.08, n, dtype=np.float32)[None, :]
+    out, cuts = M.trim_photo_edges(_grey(ramp))
+    assert cuts == (2, 2, 2, 2) and out.shape == (n, n, 3)
+
+
+def test_uniform_texture_wraps_without_a_crease():
+    """Two edges with different tone and texture: the run-on tiling leaves no
+    step at the wrap in the picture or in the relief made from it, and the
+    cross-faded strip keeps its contrast (a plain mix would halve it)."""
+    n = 512
+    rng = np.random.default_rng(11)
+    yy = np.mgrid[0:n, 0:n][0].astype(np.float32) / n
+    tex = rng.normal(0.0, 1.0, (n, n)).astype(np.float32)
+    img = _grey(np.clip(0.5 - 0.10 * yy + (0.03 + 0.03 * yy) * tex, 0, 1))   # darker and busier downward
+    (out,) = M.overlap_seamless([img])
+    assert out.shape == img.shape
+    for arr in (out[..., 0], M.derive_height(out, "full")):
+        rows = M._gblur(arr, 3.0).mean(axis=1)
+        assert abs(rows[0] - rows[-1]) < 3.0 * np.abs(np.diff(rows)).mean() + 1e-4
+    hp = out[..., 0] - M._gblur(out[..., 0], 4.0)
+    assert hp[:24].std() > 0.8 * hp[40:120].std()
+
+
+def test_even_texture_levels_the_contrast_not_the_tone():
+    n = 512
+    rng = np.random.default_rng(12)
+    xx = np.mgrid[0:n, 0:n][1].astype(np.float32) / n
+    amp = 0.02 + 0.03 * (0.5 - 0.5 * np.cos(2 * np.pi * xx))                 # soft in the corners, crisp mid-tile
+    img = _grey(np.clip(0.5 + amp * rng.normal(0.0, 1.0, (n, n)), 0, 1).astype(np.float32))
+    out = M.even_texture(img)
+    hp = lambda a: a[..., 0] - M._gblur(a[..., 0], 4.0)
+    ratio = lambda a: hp(a)[:, 216:296].std() / hp(a)[:, :40].std()
+    assert ratio(img) > 2.0 and ratio(out) < 1.45
+    assert abs(float(out.mean()) - float(img.mean())) < 0.004
+

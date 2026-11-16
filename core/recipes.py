@@ -590,6 +590,11 @@ RECIPES = {
         # photo velvet comes out darker and more saturated than sRGB holds
         # (emerald red channel ~0), which swallowed any sheen
         "albedo_cc": {"saturation": -10.0, "brightness": 4.0},
+        # dark looking down the pile, light looking across it, in any light:
+        # without it a velvet ball under soft light was flat felt. The side
+        # colour is the albedo lifted 3.5x; squared falloff keeps the body
+        # colour on a seat seen at an angle
+        "nap": {"gain": 3.5, "max_lum": 0.6, "desat": 0.25, "power": 2},
         "coat": None, "self_illum": False,
         "reflect_color": (1.0, 1.0, 1.0),
     },

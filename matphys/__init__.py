@@ -23,7 +23,7 @@ from .fresnel import (
 )
 from .metals import METALS, metal_f0, metal_edge_tint, metal_nk, metal_choices
 from .glass import (
-    GLASS, glass_ior, glass_sigma_mm, sigma_from_transmittance,
+    GLASS, glass_ior, glass_sigma_mm, sigma_from_transmittance, body_tint,
     transmittance, to_vray_fog, to_corona_absorption, glass_choices,
 )
 from .albedo import (
@@ -40,7 +40,7 @@ __all__ = [
     "f0", "fresnel_conductor", "reflectance_at", "edge_tint",
     "rgb_f0", "rgb_edge_tint", "rgb_reflectance_at",
     "METALS", "metal_f0", "metal_edge_tint", "metal_nk", "metal_choices",
-    "GLASS", "glass_ior", "glass_sigma_mm", "sigma_from_transmittance",
+    "GLASS", "glass_ior", "glass_sigma_mm", "sigma_from_transmittance", "body_tint",
     "transmittance", "to_vray_fog",
     "to_corona_absorption", "glass_choices",
     "ALBEDO_FLOOR_ERROR", "ALBEDO_FLOOR_STRICT", "ALBEDO_CEILING", "BRIGHT_WHITELIST",

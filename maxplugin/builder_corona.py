@@ -154,8 +154,14 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
 
     # --- base colour ---
     if "albedo" in maps:
-        _set(mat, "base_texmap", tex(maps["albedo"], linear=False),
-             "base colour map")
+        alb = tex(maps["albedo"], linear=False)
+        nap = recipe.get("nap")
+        if nap:
+            # a pile is lighter seen across the fibres (see builder._nap_falloff)
+            mean = _vb._albedo_mean(maps["albedo"])
+            if mean:
+                alb = _vb._nap_falloff(alb, _vb.nap_side_colour(mean, nap), nap.get("power", 2))
+        _set(mat, "base_texmap", alb, "base colour map")
 
     # --- roughness: roughness mode, map plugged directly ---
     _set(mat, "roughness_mode", ENUM_ASSUMPTIONS["roughness_mode"],
@@ -194,7 +200,7 @@ def build_material(maps, name, mclass, metal=None, use_corona_bitmap=False,
         if tint:
             # the photo's body colour (amethyst, green bottle glass): without
             # it a coloured gem built for Corona rendered colourless
-            extra = matphys.sigma_from_transmittance(tuple(tint), thickness)
+            extra = matphys.sigma_from_transmittance(matphys.body_tint(tint), thickness)
             sigma = tuple(a + b for a, b in zip(sigma, extra))
             _vb._log("  transmission tint from the photo: %s" % (tuple(tint),))
         colour, dist = matphys.to_corona_absorption(sigma, thickness,

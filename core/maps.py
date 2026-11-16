@@ -206,50 +206,212 @@ def _wrap_step(lum, axis):
     return float(np.abs(first - last).mean()) / (float(np.abs(first - second).mean()) + 1e-6)
 
 
+RUN_ON_MATCH = 0.6
+
+
+def _run_on(lum, axis, max_cut=0.10, segs=8):
+    """Where a regular texture runs on into its own start along `axis`.
+
+    The strip at the start of the photo is compared with the strip found k
+    pixels further on, for every k in the last `max_cut` of the frame: at the
+    right k the photo simply continues, so cut there and the end meets the
+    start in step. Compared are detail profiles (the mean across the other
+    axis, in `segs` pieces so wavy rows still count), over a strip 1/32 of
+    the frame long. Returns (keep, ratio): the longest cut within 15 % of the
+    best match, and the best mismatch over the median one. A weave, knit or
+    loop pile scores 0.3-0.6; grain, pile and plaster 0.8 and up, since no
+    cut is better than another.
+    """
+    a = lum if axis == 0 else lum.T
+    n = a.shape[0]
+    b = max(8, n // 32)
+    a = a - _reflect_blur(a, max(2.0, n / 64.0))
+    w = max(1, a.shape[1] // segs)
+    prof = np.stack([a[:, i * w:(i + 1) * w].mean(axis=1) for i in range(segs)], axis=1)
+    ks = np.arange(int(n * (1.0 - max_cut)) - b, n - b + 1)
+    if ks.size < 8 or ks[0] < 2 * b:
+        return n, 1.0
+    head = prof[:b]
+    # (a start strip with nothing in it, the flat of a broad stripe, would
+    # match any other flat)
+    if float(np.abs(head).mean()) < 0.5 * float(np.abs(prof).mean()):
+        return n, 1.0
+    sc = np.array([float(np.abs(prof[k:k + b] - head).mean()) for k in ks])
+    med = float(np.median(sc))
+    if med < 5e-4:                       # nothing regular to match at all
+        return n, 1.0
+    best = float(sc.min())
+    near = np.nonzero(sc <= 1.15 * best + 1e-9)[0]
+    keep = int(ks[near[-1]])
+
+    def step(p):                         # the wrap's step over a step between neighbours
+        return float(np.abs(p[0] - p[-1]).mean()) / (float(np.abs(np.diff(p, axis=0)).mean()) + 1e-9)
+
+    # already in step (a print drawn to tile, a knit the frame happens to
+    # fit), or the cut would not bring the edges closer: leave it whole
+    whole = step(prof)
+    if whole <= 1.2 or step(prof[:keep]) > 0.8 * whole:
+        return n, 1.0
+    return keep, best / med
+
+
 def snap_to_lattice(*images):
-    """Crop a photo of a regular texture to a whole number of its repeats.
+    """Crop a photo of a regular texture so its end runs on into its start.
 
     A loop pile, a ribbed rug, a knit or a plain weave almost never fits the
     frame in whole repeats, so tiled it meets itself out of step and a seam
-    line runs along every repeat however well the tones match. Where the
-    first image has a lattice along an axis (lattice_cycles), every image is
-    cropped along it to the largest whole number of cycles, centred, and
-    scaled back to size: under one repeat is lost, and the edges meet in
-    phase. Images without a lattice come back untouched. Returns (images,
-    (cycles along y or None, cycles along x or None)).
+    line runs along every repeat however well the tones match. Along each
+    axis where the first image runs on into itself somewhere near its end
+    (_run_on, match under RUN_ON_MATCH), every image is cut there and scaled
+    back to size: under a tenth is lost and the edges meet in phase, also
+    where the rows drift and no single frequency describes them (the earlier
+    whole-number-of-cycles crop left a wide gap row in a loop rug). Images
+    without such a match come back untouched. Returns (images, (rows kept or
+    None, columns kept or None)).
     """
     ref = images[0]
     lum = _luminance(ref)
     size = ref.shape[:2]
-    cuts, found = [], []
+    keeps = []
     for axis in (0, 1):
-        f = lattice_cycles(lum, axis)
-        n = size[axis]
-        keep = n
-        if f is not None:
-            keep = int(round(n * np.floor(f + 1e-6) / f))
-            # already whole to within the measurement (a print drawn to tile,
-            # a knit the photo happens to fit), or not a fine lattice after all
-            if abs(f - round(f)) < 0.1 or n - keep < 1 or keep < 0.9 * n:
-                keep, f = n, None
-            else:
-                # and only where it really brings the two edges into step
-                lo = (n - keep) // 2
-                cut = np.take(lum, range(lo, lo + keep), axis=axis)
-                if _wrap_step(cut, axis) > 0.8 * _wrap_step(lum, axis):
-                    keep, f = n, None
-        lo = (n - keep) // 2
-        cuts.append((lo, lo + keep))
-        found.append(f)
-    if found == [None, None]:
+        keep, ratio = _run_on(lum, axis)
+        keeps.append(keep if ratio < RUN_ON_MATCH and keep < size[axis] else None)
+    if keeps == [None, None]:
         return list(images), (None, None)
-    (y0, y1), (x0, x1) = cuts
+    y1, x1 = keeps[0] or size[0], keeps[1] or size[1]
     out = []
     for im in images:
-        crop = np.clip(im[y0:y1, x0:x1], 0.0, 1.0)
+        crop = np.clip(im[:y1, :x1], 0.0, 1.0)
         pil = Image.fromarray((crop * 255.0 + 0.5).astype(np.uint8))
         out.append(_to_float(pil.resize((size[1], size[0]), Image.LANCZOS)))
-    return out, tuple(found)
+    return out, tuple(keeps)
+
+
+def overlap_seamless(images, keeps=(None, None), band=1.0 / 16.0):
+    """Tile a uniform texture by running its end on into its start.
+
+    make_seamless() keeps every feature where it is and bends the tone so
+    the borders meet; what it cannot do is make two edges with different
+    texture agree, and on a pile, a boucle or a plaster the wrap stayed a
+    step in the relief: a crease down every repeat. A uniform texture has no
+    features to protect, so here the frame is cut short along each axis and
+    the strip beyond the cut is cross-faded over the start: the picture
+    after the last row IS the first row, tone, grain and all, with no mirror
+    (the old cross-fade's ghost) and nothing bent. `keeps` gives the cut per
+    axis where the texture runs on into itself (snap_to_lattice: the two
+    strips are then in step); elsewhere `band` of the frame is used. Mixing
+    two unrelated strips halves their contrast, so the detail is scaled back
+    by what the mix lost, from the strips' measured correlation (in step:
+    nothing lost, nothing added). A difference in tone between the strips is
+    first removed as a ramp across the tile. The result is scaled back to size; every
+    image gets the same cuts. Not for prints or figured materials: those
+    would show double.
+    """
+    size = images[0].shape[:2]
+    out = [np.clip(im[..., :3] if im.ndim == 3 else im, 0.0, 1.0).astype(np.float32) for im in images]
+    for axis in (0, 1):
+        n = out[0].shape[axis]
+        wide = max(8, int(n * band))
+        k = int(keeps[axis]) if keeps[axis] else n - wide
+        b = min(n - k, wide)
+        if b < 2:
+            continue
+        t = (np.arange(b, dtype=np.float32) + 0.5) / b
+        w = (t * t * (3.0 - 2.0 * t))[:, None]                 # 0 at the wrap, 1 where the photo takes over
+        sig = max(2.0, b / 6.0)
+        done = []
+        for im in out:
+            chans = []
+            for c in range(im.shape[2] if im.ndim == 3 else 1):
+                u = im[..., c] if im.ndim == 3 else im
+                u = u if axis == 0 else u.T
+                low = _reflect_blur(u, sig)
+                # a tone difference between the two strips (light falling off
+                # down the photo) is taken out as one ramp over the whole
+                # tile, not left to the cross-fade to make up in a band
+                ramp = (float(low[k:k + b].mean() - low[:b].mean())
+                        * (np.arange(u.shape[0], dtype=np.float32) / k - 0.5))[:, None]
+                u, low = u - ramp, low - ramp
+                d_head, d_tail = u[:b] - low[:b], u[k:k + b] - low[k:k + b]
+                den = float(np.sqrt((d_head ** 2).mean() * (d_tail ** 2).mean())) + 1e-9
+                rho = min(1.0, max(0.0, float((d_head * d_tail).mean()) / den))
+                lost = np.sqrt(w * w + (1.0 - w) ** 2 + 2.0 * w * (1.0 - w) * rho)
+                mix = w * low[:b] + (1.0 - w) * low[k:k + b] + (w * d_head + (1.0 - w) * d_tail) / lost
+                res = np.concatenate([mix, u[b:k]], axis=0)
+                chans.append(res if axis == 0 else res.T)
+            done.append(np.stack(chans, axis=-1) if im.ndim == 3 else chans[0])
+        out = done
+    res = []
+    for im in out:
+        pil = Image.fromarray((np.clip(im, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8))
+        res.append(_to_float(pil.resize((size[1], size[0]), Image.LANCZOS)))
+    return res
+
+
+def trim_photo_edges(rgb):
+    """Cut away a photo's own border before it is tiled.
+
+    The outermost rows of a photo are often not the material: a generated
+    image's last rows come out a different tone, and a pile or a sheen glows
+    toward one edge of the frame. Tiled, that is a line along every repeat,
+    and the relief, which is normalised to whatever contrast a material has,
+    turns a 1 % shift on a plain cloth into a ridge (a velvet rendered with a
+    crease down each tile). 1/256 of the frame goes from every side. A side
+    loses more where its rows run off the material's own trend: the row means
+    are compared with a quadratic fitted to the inner 7/8 of the frame, and
+    an unbroken run of rows from the edge that sit over 2.5 robust sigma to
+    one side of it is cut, with half as much again. A run that has not ended
+    within 1/32 of the frame is the lighting falling off, not a border, and
+    is left to the de-lighting; a steady ramp follows the trend and the rows
+    of a weave swing inside the sigma, so both stay too. The rest is scaled
+    back to size.
+    Returns (rgb, (top, bottom, left, right) pixels cut).
+    """
+    n0, n1 = rgb.shape[:2]
+    if min(n0, n1) < 256:
+        return rgb, (0, 0, 0, 0)
+    lum = _luminance(rgb)
+    cuts = []
+    for axis in (0, 1):
+        prof = lum.mean(axis=1 - axis).astype(np.float64)
+        n = prof.size
+        always, cap = max(2, n // 256), n // 32
+        x = np.arange(n, dtype=np.float64) / n
+        inner = slice(n // 16, n - n // 16)
+        res = prof - np.polyval(np.polyfit(x[inner], prof[inner], 2), x)
+        mid = float(np.median(res[inner]))
+        sigma = 1.4826 * float(np.median(np.abs(res[inner] - mid))) + 1e-4
+        for r in (res, res[::-1]):
+            z = (r[always:always + cap] - mid) / sigma
+            run = 0
+            while run < cap and abs(z[run]) > 2.5 and z[run] * z[0] > 0:
+                run += 1
+            cuts.append(always + (int(run * 1.5) if 3 <= run < cap else 0))
+    top, bottom, left, right = cuts
+    crop = np.clip(rgb[top:n0 - bottom, left:n1 - right, :3], 0.0, 1.0)
+    pil = Image.fromarray((crop * 255.0 + 0.5).astype(np.uint8))
+    return _to_float(pil.resize((n1, n0), Image.LANCZOS)), (top, bottom, left, right)
+
+
+def even_texture(img, sigma_frac=1.0 / 8.0, lo=0.6, hi=1.6):
+    """Even out how strong the fine texture is across a uniform material.
+
+    flatten_drift() evens the tone of a weave or a pile; the photo's texture
+    can still be crisp at one side and soft at the other (focus, raking
+    light, crushed pile), and where the two meet at the wrap every repeat
+    shows as a frame in the relief. The detail under 1/64 of the tile is
+    scaled by a slowly varying gain (the median local contrast over the local
+    one, measured over `sigma_frac` of the tile, clamped to [lo, hi]); tone
+    and colour are untouched. Expects a tileable image (periodic blurs).
+    """
+    a = np.clip(img[..., :3], 0.0, 1.0).astype(np.float32)
+    n = a.shape[0]
+    fine = max(2.0, n / 64.0)
+    low = np.stack([_gblur(a[..., c], fine) for c in range(3)], axis=-1)
+    d = _luminance(a) - _luminance(low)
+    energy = np.sqrt(np.maximum(_gblur(d * d, sigma_frac * n), 0.0)) + 1e-6
+    gain = np.clip(float(np.median(energy)) / energy, lo, hi)
+    return np.clip(low + (a - low) * gain[..., None], 0.0, 1.0).astype(np.float32)
 
 
 def _reflect_blur(a, sigma):
@@ -1454,6 +1616,10 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
                                     "backdrop (no alpha channel)")
     # deterministic per photo: same image -> same roughness noise
     seed = int(np.asarray(rgb_img.resize((16, 16)), dtype=np.int64).sum()) % (2 ** 31)
+    if seamless and not recipe.get("grid"):
+        # the photo's own border (off-tone last rows, an edge glow) would
+        # repeat as a line; a tile grid is re-laid from its joints instead
+        rgb, _cut = trim_photo_edges(rgb)
 
     _tick(progress, 2, "Making the maps")
     albedo = derive_albedo(rgb)
@@ -1477,11 +1643,14 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
     if seamless:
         # (uniform classes only: in marble or wood a strong vein spacing
         # would pass for a lattice)
-        if recipe.get("stationary") and not recipe.get("opacity"):
+        uniform = bool(recipe.get("stationary")) and not recipe.get("opacity")
+        whole = (albedo, rgb)
+        cycles = (None, None)
+        if uniform:
             (albedo, rgb), cycles = snap_to_lattice(albedo, rgb)
             if cycles != (None, None) and warnings is not None:
-                warnings.append("regular weave found: the photo was cropped to whole "
-                                "repeats so its edges meet in step")
+                warnings.append("regular weave found: the photo was cropped where it "
+                                "runs on into itself, so its edges meet in step")
         albedo = make_seamless(albedo)
         rgb = make_seamless(rgb)
         if recipe.get("stationary") or (recipe.get("plain_unless_tiled") and plan is None):
@@ -1494,6 +1663,15 @@ def generate_maps(image_path, out_dir, mclass="generic", resolution="4k",
                 extra["pattern"] = True
             if warnings is not None:
                 warnings.extend(notes)
+            if not notes:
+                if uniform:
+                    # no print or stripe, so nothing to show double: the end
+                    # is run on into the start instead (no crease at the wrap)
+                    albedo, rgb = overlap_seamless(whole, cycles)
+                    albedo = flatten_drift(albedo)
+                # and the texture should be equally strong everywhere, in the
+                # colour and in what the relief is made from
+                albedo, rgb = even_texture(albedo), even_texture(rgb)
             if not notes and has_line_pattern(albedo):
                 if extra is not None:
                     extra["pattern"] = True

@@ -63,6 +63,7 @@ CORONA_RND_PROPS = frozenset({"name"})
 TWOSIDED_PROPS = frozenset({"frontMtl", "translucency", "mult_by_front_diffuse", "name"})
 NOISE_PROPS = frozenset({"type", "size", "color1", "color2", "name"})
 COLORCORRECTION_PROPS = frozenset({"map", "brightness", "saturation", "hueShift", "name"})
+FALLOFF_PROPS = frozenset({"type", "map1", "map2", "color1", "color2", "ior", "name"})
 MULTI_PROPS = frozenset({"materialList", "name"})
 NORMALMAP_PROPS = frozenset({"normal_map", "name"})
 BITMAP_PROPS = frozenset({"filename", "fileName", "bitmap", "name"})
@@ -82,6 +83,7 @@ _SCHEMAS = {
     "VRay2SidedMtl": TWOSIDED_PROPS,
     "Noise": NOISE_PROPS,
     "ColorCorrection": COLORCORRECTION_PROPS,
+    "Falloff": FALLOFF_PROPS,
     "MultiMaterial": MULTI_PROPS,
     "VRayNormalMap": NORMALMAP_PROPS,
     "Bitmaptexture": BITMAP_PROPS,
@@ -264,6 +266,9 @@ class MockRuntime:
 
     def ColorCorrection(self):
         return self._node("ColorCorrection")
+
+    def Falloff(self):
+        return self._node("Falloff")
 
     def MultiMaterial(self, numsubs=10):
         mm = self._node("MultiMaterial")

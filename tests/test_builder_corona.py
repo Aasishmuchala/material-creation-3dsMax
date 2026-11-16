@@ -103,8 +103,9 @@ def test_gemstone_tint_deepens_absorption_colour():
     tint = (0.859, 0.3945, 1.0)
     p = bc.build_material(MAPS, "Gem", "gemstone", tint=tint).props
     fog = RECIPES["gemstone"]["refraction"]["fog_color"]
+    # (through matphys.body_tint: the tint made safe for thick pieces)
     assert _close(p["volumetricAbsorptionColor"].as_unit(),
-                  tuple(f * t for f, t in zip(fog, tint)), 1e-6)
+                  tuple(f * t for f, t in zip(fog, matphys.body_tint(tint))), 1e-6)
     assert abs(p["volumetricAbsorptionDistance"] - 10.0) < 1e-9
     assert any("transmission tint" in line for line in b.LOG)
 

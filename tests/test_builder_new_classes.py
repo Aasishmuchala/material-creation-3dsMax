@@ -149,11 +149,31 @@ def test_sheen_from_albedo_lifts_to_the_luminance_and_desaturates():
 def test_velvet_albedo_is_pulled_back_into_gamut():
     b, _ = mock_pymxs.install()
     mat = b.build_material(MAPS, "Velvet", "velvet", albedo_mean=EMERALD)
-    cc = mat.props["texmap_diffuse"]
+    nap = mat.props["texmap_diffuse"]
+    cc = nap.props["map1"]                  # face on: the corrected albedo
     assert cc.cls == "ColorCorrection"
     assert cc.props["saturation"] < 0 and cc.props["brightness"] > 0
     lin = b.build_material(MAPS, "Linen", "fabric")
     assert lin.props["texmap_diffuse"].cls != "ColorCorrection"     # only where the recipe asks
+
+
+def test_velvet_is_lighter_seen_across_the_pile():
+    """Soft frontal light leaves the sheen lobe nothing to answer and velvet
+    rendered as flat felt: the albedo now sits in a view falloff, itself face
+    on and a lifted fibre colour at grazing view, squared (nested twice)."""
+    b, _ = mock_pymxs.install()
+    mat = b.build_material(MAPS, "Velvet", "velvet", albedo_mean=EMERALD)
+    outer = mat.props["texmap_diffuse"]
+    assert outer.cls == "Falloff" and outer.props["type"] == 1
+    inner = outer.props["map2"]
+    assert inner.cls == "Falloff" and inner.props["map1"] is outer.props["map1"]
+    side = _unit(inner.props["color2"])
+    lum = lambda c: 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    assert lum(side) == pytest.approx(min(0.6, 3.5 * lum(EMERALD)), rel=0.02)
+    assert side[1] > side[2] > side[0]                      # still emerald
+    assert any("pile nap" in line for line in b.LOG)
+    lin = b.build_material(MAPS, "Linen", "fabric")
+    assert lin.props["texmap_diffuse"].cls != "Falloff"     # a flat weave has no nap
 
 
 def test_linen_keeps_its_recipe_sheen():

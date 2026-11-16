@@ -140,4 +140,19 @@ def test_gemstone_tint_deepens_fog_colour():
     b, rt = mock_pymxs.install()
     tinted = b.build_material(MAPS, "S", "gemstone",
                               tint=(0.8, 0.5, 1.0)).props["refraction_fogColor"].as_unit()
-    assert tinted[1] < plain[1] - 0.3 and tinted[2] == pytest.approx(plain[2], abs=0.01)
+    # green goes; blue, the stone's window, is absorbed a little too (a
+    # thick stone goes dark instead of glowing pure blue), far less than green
+    assert tinted[1] < plain[1] - 0.3 and plain[2] - 0.12 < tinted[2] < plain[2] - 0.03
+
+
+def test_body_tint_holds_up_at_depth():
+    """Fifteen thicknesses of an amethyst tint: still purple (red and blue
+    both there, red at least a third of blue) and dark, not pure bright
+    blue; a clear body is left alone, and a one-channel colour keeps its hue."""
+    deep = [c ** 15 for c in matphys.body_tint((0.9219, 0.5307, 1.0))]
+    assert deep[1] < 0.01 and 0.15 < deep[2] < 0.6 and deep[0] > 0.33 * deep[2]
+    raw = [c ** 15 for c in (0.9219, 0.5307, 1.0)]
+    assert raw[2] == 1.0 and raw[0] < 0.31                 # what it was: glowing blue
+    assert matphys.body_tint((1.0, 1.0, 1.0)) == (1.0, 1.0, 1.0)
+    r, g, b = matphys.body_tint((0.5, 1.0, 0.4))          # bottle green: no second channel to hold
+    assert g > 0.9 and r / g == pytest.approx(0.5) and b / g == pytest.approx(0.4)

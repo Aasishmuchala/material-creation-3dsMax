@@ -129,6 +129,8 @@ def _check_material(kind, mclass, mat, rt, log, maps):
         core = mat.props["frontMtl"] if cls == "VRay2SidedMtl" else mat
         if recipe.get("two_sided"):
             assert cls == "VRay2SidedMtl"
+        # (a voile is two-sided AND thinly see-through, on purpose)
+        if recipe.get("two_sided") and not recipe.get("see_through"):
             assert not any(k.startswith("refraction")
                            and k != "refraction_ior"
                            for k in core.props), "foliage refracts"
@@ -137,7 +139,7 @@ def _check_material(kind, mclass, mat, rt, log, maps):
             assert m in (0.0, 1.0), "fractional metalness %r" % m
     else:
         assert cls == "CoronaPhysicalMtl"
-        if recipe.get("two_sided"):
+        if recipe.get("two_sided") and not recipe.get("see_through"):
             assert not any(k in mat.props for k in (
                 "refractionAmount", "useThinMode",
                 "volumetricAbsorptionColor", "volumetricAbsorptionDistance"))
