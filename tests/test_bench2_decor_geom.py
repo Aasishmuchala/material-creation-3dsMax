@@ -165,7 +165,8 @@ def test_rounded_box_is_a_closed_solid_with_true_rounds():
     a, b, c, r = 20.0, 10.0, 4.0, 0.5
     md = fbd._rbox_md(-10.0, 10.0, -5.0, 5.0, 0.0, 4.0, r)
     vol = check_mesh(md)
-    assert bounds(md) == pytest.approx([(-10.0, 10.0), (-5.0, 5.0), (0.0, 4.0)], abs=1e-9)
+    # (flat: newer pytest refuses approx() on nested sequences)
+    assert [v for lo_hi in bounds(md) for v in lo_hi] == pytest.approx([-10.0, 10.0, -5.0, 5.0, 0.0, 4.0], abs=1e-9)
     ia, ib, ic = a - 2 * r, b - 2 * r, c - 2 * r
     exact = (ia * ib * ic + 2 * r * (ia * ib + ia * ic + ib * ic) + math.pi * r * r * (ia + ib + ic)
              + 4.0 / 3.0 * math.pi * r ** 3)
